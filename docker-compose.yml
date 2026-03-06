@@ -36,7 +36,7 @@ services:
     container_name: "aose-api"
     env_file: ".env.example"
     environment:
-      DATABASE_URL: "postgresql+psycopg://aose:aose@postgres:5432/aose"
+      DATABASE_URL: "postgresql://aose:aose@postgres:5432/aose"
     ports: 
       - "8000:8000"
     depends_on:
@@ -52,7 +52,7 @@ services:
     container_name: "aose-worker"
     env_file: ".env.example"
     environment:
-      DATABASE_URL: "postgresql+psycopg://aose:aose@postgres:5432/aose"
+      DATABASE_URL: "postgresql://aose:aose@postgres:5432/aose"
     depends_on:
       postgres:
         condition: "service_healthy"
