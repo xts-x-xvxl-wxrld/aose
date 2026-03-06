@@ -1,0 +1,9 @@
+{
+    "name": "aose-web",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "lint": "echo \"No linting required yet\"",
+        "build": "echo \"No build required yet\""
+    }
+}

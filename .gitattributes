@@ -1,0 +1,13 @@
+* text=auto
+
+# Shell scripts must stay LF (Linux-friendly)
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# PowerShell can stay CRLF
+*.ps1  text eol=crlf
+
+# Common config files (usually safer as LF)
+*.yml  text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf

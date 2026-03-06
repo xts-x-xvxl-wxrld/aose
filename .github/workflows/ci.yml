@@ -1,0 +1,65 @@
+name: CI Sanity Pipeline
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt -r api/requirements-dev.txt
+          pip install -r worker/requirements.txt -r worker/requirements-dev.txt
+          
+      - name: Ruff format check
+        run: |
+          ruff format --check api/
+          ruff format --check worker/
+          
+      - name: Ruff lint
+        run: |
+          ruff check api/
+          ruff check worker/
+          
+      - name: Run Pytest
+        run: |
+          pytest -q api/
+          pytest -q worker/
+          
+      - name: Enforce CI Invariants Gate
+        run: |
+          pytest -rs api/tests/test_invariants.py > test_out.txt || true
+          grep "PH-004" test_out.txt || (echo "CI Gate Failed: Missing PH-004 in skip reason" && exit 1)
+
+  web-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          
+      - name: NPM CI
+        working-directory: ./web
+        run: npm ci
+        
+      - name: Lint Web
+        working-directory: ./web
+        run: npm run lint
+        
+      - name: Build Web
+        working-directory: ./web
+        run: npm run build

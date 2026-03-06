@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: "postgres:16"
+    container_name: "aose-postgres"
+    ports: 
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: "aose"
+      POSTGRES_USER: "aose"
+      POSTGRES_PASSWORD: "aose"
+    volumes:
+      - "pgdata:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aose -d aose"]
+      interval: "5s"
+      timeout: "3s"
+      retries: 20
+
+  redis:
+    image: "redis:7"
+    container_name: "aose-redis"
+    ports: 
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: "5s"
+      timeout: "3s"
+      retries: 20
+
+  api:
+    build:
+      context: "api"
+      dockerfile: "Dockerfile"
+    container_name: "aose-api"
+    env_file: ".env.example"
+    environment:
+      DATABASE_URL: "postgresql+psycopg://aose:aose@postgres:5432/aose"
+    ports: 
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
+
+  worker:
+    build:
+      context: "worker"
+      dockerfile: "Dockerfile"
+    container_name: "aose-worker"
+    env_file: ".env.example"
+    environment:
+      DATABASE_URL: "postgresql+psycopg://aose:aose@postgres:5432/aose"
+    depends_on:
+      postgres:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
+
+volumes:
+  pgdata: {}

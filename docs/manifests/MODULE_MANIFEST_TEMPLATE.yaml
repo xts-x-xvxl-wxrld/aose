@@ -1,0 +1,16 @@
+module_name: ""
+consumes_stage: ""
+produces_stage: ""
+inputs:
+  - record_type: ""
+    required_fields: []
+outputs:
+  - record_type: ""
+    provided_fields: []
+idempotency_key_strategy: ""
+budget_spend_rules:
+  attempt_cost: 1
+  max_attempts: 3
+failure_modes:
+  - stop_reason: ""
+    is_retryable: false

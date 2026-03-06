@@ -1,0 +1,271 @@
+# docs/epics/epic-a/CONTRACT.yaml
+# Epic A contract: deterministic scaffold inputs. Prompts must not override these decisions.
+
+epic:
+  id: epic-a
+  name: "Repo + local environment (foundation)"
+  version: "0.1"
+  date: "2026-03-04"
+  goal:
+    - "One monorepo with api/, worker/, web/, docs/"
+    - "Reproducible local stack (Postgres + Redis) via Docker Compose"
+    - "CI sanity pipeline: format + lint + unit tests; PR fails on failure"
+  non_goals:
+    - "Production deployment"
+    - "Auth/billing/payments"
+    - "Real outbound sending (must remain disabled)"
+    - "Integration/e2e tests (unit tests only)"
+
+repo:
+  name: "ai-outbound-support-engine"
+  layout:
+    top_level_dirs:
+      - api
+      - worker
+      - web
+      - docs
+    required_root_files:
+      - README.md
+      - Makefile
+      - .env.example
+      - .gitignore
+      - docker-compose.yml
+      - .github/workflows/ci.yml
+  docs_required:
+    - docs/system/AGENT_RULES.md
+    - docs/epics/epic-a/SPEC.md
+    - docs/epics/epic-a/CONTRACT.yaml
+    - docs/epics/epic-a/PLACEHOLDERS.md
+    - docs/policy/policy-pack-safe-v0_1.md
+    - docs/data-spine/DATA-SPINE-v0.1.md
+
+runtime:
+  python: "3.12"
+  node: "20"
+
+defaults:
+  policy_pack_id: "safe_v0_1"
+  send_enabled: false
+
+env:
+  file: ".env.example"
+  required_variables:
+    APP_ENV:
+      default: "local"
+    POLICY_PACK_ID:
+      default: "safe_v0_1"
+    SEND_ENABLED:
+      default: "false"
+    DATABASE_URL:
+      # container-to-container connection (API/worker run in compose)
+      default: "postgresql://aose:aose@postgres:5432/aose"
+    REDIS_URL:
+      default: "redis://redis:6379/0"
+    API_HOST:
+      default: "0.0.0.0"
+    API_PORT:
+      default: "8000"
+
+services:
+  api:
+    language: "python"
+    framework: "fastapi"
+    package_name: "aose_api"
+    listen:
+      host: "0.0.0.0"
+      port: 8000
+    health:
+      path: "/healthz"
+      success_code: 200
+    docker:
+      context_dir: "api"
+      dockerfile: "api/Dockerfile"
+      image: "aose-api:dev"
+      command: ["uvicorn", "aose_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    persistence:
+      migrations: "api/migrations" # alembic
+
+  worker:
+    language: "python"
+    queue: "rq"
+    package_name: "aose_worker"
+    docker:
+      context_dir: "worker"
+      dockerfile: "worker/Dockerfile"
+      image: "aose-worker:dev"
+      command: ["python", "-m", "aose_worker.run_worker"]
+
+  web:
+    language: "node"
+    framework: "vite-react-ts"
+    docker:
+      enabled: false
+    dev_port: 5173
+
+infra:
+  compose:
+    file: "docker-compose.yml"
+    services:
+      postgres:
+        image: "postgres:16"
+        container_name: "aose-postgres"
+        ports: ["5432:5432"]
+        environment:
+          POSTGRES_DB: "aose"
+          POSTGRES_USER: "aose"
+          POSTGRES_PASSWORD: "aose"
+        volumes:
+          - "pgdata:/var/lib/postgresql/data"
+        healthcheck:
+          test: ["CMD-SHELL", "pg_isready -U aose -d aose"]
+          interval: "5s"
+          timeout: "3s"
+          retries: 20
+
+      redis:
+        image: "redis:7"
+        container_name: "aose-redis"
+        ports: ["6379:6379"]
+        healthcheck:
+          test: ["CMD", "redis-cli", "ping"]
+          interval: "5s"
+          timeout: "3s"
+          retries: 20
+
+      api:
+        build:
+          context: "api"
+          dockerfile: "Dockerfile"
+        container_name: "aose-api"
+        env_file: ".env"
+        environment:
+          APP_ENV: "local"
+          DATABASE_URL: "postgresql://aose:aose@postgres:5432/aose"
+          REDIS_URL: "redis://redis:6379/0"
+          POLICY_PACK_ID: "safe_v0_1"
+          SEND_ENABLED: "false"
+        ports: ["8000:8000"]
+        depends_on:
+          postgres:
+            condition: "service_healthy"
+          redis:
+            condition: "service_healthy"
+
+      worker:
+        build:
+          context: "worker"
+          dockerfile: "Dockerfile"
+        container_name: "aose-worker"
+        env_file: ".env"
+        environment:
+          APP_ENV: "local"
+          DATABASE_URL: "postgresql://aose:aose@postgres:5432/aose"
+          REDIS_URL: "redis://redis:6379/0"
+          POLICY_PACK_ID: "safe_v0_1"
+          SEND_ENABLED: "false"
+        depends_on:
+          postgres:
+            condition: "service_healthy"
+          redis:
+            condition: "service_healthy"
+
+    volumes:
+      pgdata: {}
+
+tooling:
+  python:
+    dev_tools:
+      formatter: "ruff"
+      linter: "ruff"
+      test_runner: "pytest"
+      db_migrations: "alembic"
+    api_requirements:
+      - "api/requirements.txt"
+      - "api/requirements-dev.txt"
+    worker_requirements:
+      - "worker/requirements.txt"
+      - "worker/requirements-dev.txt"
+
+  makefile:
+    required_targets:
+      up:
+        command: "docker compose up -d postgres redis"
+      down:
+        command: "docker compose down -v"
+      dev:
+        command: "docker compose up -d --build postgres redis api worker"
+      logs:
+        command: "docker compose logs -f --tail=200 api worker postgres redis"
+      test:
+        command:
+          - "docker compose run --rm api pytest -q"
+          - "docker compose run --rm worker pytest -q"
+      lint:
+        command:
+          - "docker compose run --rm api ruff check ."
+          - "docker compose run --rm worker ruff check ."
+      fmt:
+        command:
+          - "docker compose run --rm api ruff format ."
+          - "docker compose run --rm worker ruff format ."
+      fmt-check:
+        command:
+          - "docker compose run --rm api ruff format --check ."
+          - "docker compose run --rm worker ruff format --check ."
+      db-migrate:
+        command: "docker compose run --rm api alembic upgrade head"
+
+ci:
+  provider: "github_actions"
+  workflow_file: ".github/workflows/ci.yml"
+  triggers:
+    pull_request: true
+    push_branches: ["main"]
+  jobs:
+    python-checks:
+      runs_on: "ubuntu-latest"
+      steps:
+        - "checkout"
+        - "setup-python:3.12"
+        - "pip-install: api/requirements-dev.txt + api/requirements.txt"
+        - "pip-install: worker/requirements-dev.txt + worker/requirements.txt"
+        - "ruff-format-check: api + worker"
+        - "ruff-lint: api + worker"
+        - "pytest: api + worker"
+    web-checks:
+      enabled: true
+      runs_on: "ubuntu-latest"
+      steps:
+        - "checkout"
+        - "setup-node:20"
+        - "npm-ci:web"
+        - "npm-run:lint:web"
+        - "npm-run:build:web"
+
+acceptance:
+  a1_monorepo:
+    must_exist:
+      - "api/"
+      - "worker/"
+      - "web/"
+      - "docs/"
+    dev_command: "make dev"
+    expected_signals:
+      - "docker compose ps shows postgres, redis, api, worker running"
+      - "GET http://localhost:8000/healthz returns 200"
+
+  a2_compose_connectivity:
+    expected_signals:
+      - "api connects to Postgres using DATABASE_URL"
+      - "worker connects to Redis using REDIS_URL"
+
+  a3_ci_gates:
+    expected_signals:
+      - "CI fails on formatting violations"
+      - "CI fails on lint violations"
+      - "CI fails on unit test failures"
+
+placeholders:
+  allowed:
+    # Contract is intended to avoid placeholders for Epic A. Only add here if absolutely required.
+    - "PH-EPIC-A-001: (reserved) Web framework swap if team later standardizes on Next.js"
