@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "full-stack",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "--build"],
+      "port": 8000
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "--build", "api"],
+      "port": 8000
+    },
+    {
+      "name": "worker",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "--build", "worker"],
+      "port": 0
+    }
+  ]
+}
