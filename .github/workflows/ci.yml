@@ -8,6 +8,8 @@ on:
 jobs:
   python-checks:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}/api:${{ github.workspace }}/worker
     steps:
       - uses: actions/checkout@v4
       
