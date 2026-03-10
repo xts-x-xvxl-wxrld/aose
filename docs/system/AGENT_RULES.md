@@ -35,14 +35,14 @@ When executing an epic, read these in order and treat earlier items as higher pr
 
 1) `docs/system/AGENT_RULES.md` (this file)
 2) `docs/epics/<epic-id>/SPEC.md` (human intent, acceptance, boundaries)
-3) `docs/epics/<epic-id>/CONTRACT.yaml` (machine contract; single source of truth for build decisions)
+3) `docs/epics/<epic-id>/CONTRACT-<EPICID>.yaml` (machine contract; single source of truth for build decisions)
 4) `docs/epics/<epic-id>/PLACEHOLDERS.md` (allowed TBDs + required default stub behavior)
 5) `docs/policy/policy-pack-safe-v0_1.md` (guardrails defaults)
 6) `docs/data-spine/DATA-SPINE-v0.1.md` (canonical shapes and invariants)
 
 If any conflict exists:
-- CONTRACT.yaml overrides everything except AGENT_RULES.md.
-- SPEC.md defines intent; CONTRACT.yaml defines implementation.
+- `CONTRACT-<EPICID>.yaml` overrides everything except AGENT_RULES.md.
+- SPEC.md defines intent; `CONTRACT-<EPICID>.yaml` defines implementation.
 
 ---
 
@@ -51,7 +51,7 @@ If any conflict exists:
 Prompts are triggers, not specs. The prompt may include:
 - Epic identifier (example: “Epic A”)
 - Execution mode: “plan → scaffold → verify”
-- Instruction: “treat CONTRACT.yaml as authoritative; do not invent decisions”
+- Instruction: “treat `CONTRACT-<EPICID>.yaml` as authoritative; do not invent decisions”
 - Output requirement: “use the standard output template”
 
 Prompts must not embed:
@@ -60,7 +60,7 @@ Prompts must not embed:
 - CI details
 - Make target behaviors
 
-If the prompt contains implementation details that contradict CONTRACT.yaml, ignore the prompt details and follow CONTRACT.yaml. Record the mismatch in the report under “Conflicts”.
+If the prompt contains implementation details that contradict `CONTRACT-<EPICID>.yaml`, ignore the prompt details and follow `CONTRACT-<EPICID>.yaml`. Record the mismatch in the report under “Conflicts”.
 
 ---
 
@@ -74,7 +74,7 @@ The agent output MUST follow this template, in this order:
 - Environment assumptions (OS, shell, runtime availability)
 
 2) Constraints Digest
-- A checklist derived from CONTRACT.yaml (ports, services, folders, env vars, Make targets, CI jobs)
+- A checklist derived from `CONTRACT-<EPICID>.yaml` (ports, services, folders, env vars, Make targets, CI jobs)
 
 3) Action Plan (no edits yet)
 For each task:
@@ -147,12 +147,12 @@ Idempotency:
 - Never create multiple competing configs for the same concern.
 
 Naming and structure:
-- Create exactly the folder tree specified by CONTRACT.yaml.
-- Do not add extra top-level folders unless required by CONTRACT.yaml.
+- Create exactly the folder tree specified by `CONTRACT-<EPICID>.yaml`.
+- Do not add extra top-level folders unless required by `CONTRACT-<EPICID>.yaml`.
 
 Dependencies:
 - Use pinned or constrained versions where practical.
-- Lock files (poetry.lock, uv.lock, package-lock.json) are allowed only if CONTRACT.yaml specifies them.
+- Lock files (poetry.lock, uv.lock, package-lock.json) are allowed only if `CONTRACT-<EPICID>.yaml` specifies them.
 
 Secrets:
 - Never commit `.env`.
@@ -165,7 +165,7 @@ Secrets:
 This is the default procedure used unless an epic overrides it explicitly.
 
 Phase 1: Plan
-- Parse SPEC.md + CONTRACT.yaml into a task graph.
+- Parse SPEC.md + `CONTRACT-<EPICID>.yaml` into a task graph.
 - Identify parallel lanes by file ownership:
   - Infra lane: compose/Make/CI/api/worker scaffolding
   - Web lane: web/ only
@@ -175,10 +175,10 @@ Phase 2: Scaffold
 - Create repo skeleton exactly as contracted.
 - Create compose stack for Postgres + Redis (service names/ports per contract).
 - Create minimal API and worker skeletons sufficient to run and connect.
-- Create minimal web skeleton (only if CONTRACT.yaml requires; otherwise stub folder + README).
+- Create minimal web skeleton (only if `CONTRACT-<EPICID>.yaml` requires; otherwise stub folder + README).
 
 Phase 3: Verify
-- Run the acceptance commands from SPEC.md (or CONTRACT.yaml if commands live there).
+- Run the acceptance commands from SPEC.md (or `CONTRACT-<EPICID>.yaml` if commands live there).
 - Minimum Epic A gating:
   - `make dev` results in API up + DB reachable
   - API can connect to Postgres
@@ -195,7 +195,7 @@ If verification cannot be executed in the current environment, output:
 ## 7) Minimal safety and governance alignment
 
 Defaults:
-- PolicyPack safe_v0_1 is assumed unless CONTRACT.yaml specifies otherwise.
+- PolicyPack safe_v0_1 is assumed unless `CONTRACT-<EPICID>.yaml` specifies otherwise.
 - `send_enabled` must remain false during Epic A.
 - Any future sending logic must be separated and gated behind approval states; Epic A must not implement sending.
 

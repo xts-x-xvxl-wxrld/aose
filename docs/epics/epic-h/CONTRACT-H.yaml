@@ -1,0 +1,475 @@
+epic_h_contract_version: epic_h_v0_1_locked
+
+inherits:
+  data_spine_contract_version: spine_v0_1_locked
+  policy_pack_id: safe_v0_1
+
+epic:
+  id: epic-h
+  name: "Drafts + approval"
+  version: "0.1"
+  date: "2026-03-08"
+  objective:
+    - "Build a compact evidence digest for drafting from canonical seller, account, contact, and evidence records."
+    - "Generate OutreachDraft records with PersonalizationAnchors that map text spans to evidence_ids."
+    - "Record approval as an explicit ApprovalDecision and route deterministically by decision status."
+    - "Provide a review UI where anchors open evidence cards inline so approval does not require hunting for context."
+  non_goals:
+    - "No external sending."
+    - "No SendAttempt creation in Epic H."
+    - "No reply ingestion."
+    - "No campaign analytics."
+    - "No new canonical tables beyond already-locked Data Spine models."
+    - "No bypass of approval_request stage."
+    - "No unsupported claims in draft text."
+
+dependencies:
+  required_prior_contracts:
+    - "Epic B canonical models and IDs are already implemented."
+    - "Epic C stage router, idempotency guard, replay safety, and structured events are already implemented."
+    - "Epic G contact records and minimal enrichment are already implemented."
+  required_canonical_models:
+    - SellerProfile
+    - Account
+    - Evidence
+    - Contact
+    - OutreachDraft
+    - PersonalizationAnchor
+    - ApprovalDecision
+  read_only_optional_models:
+    - Scorecard
+    - SendAttempt
+
+stage_contract:
+
+  consumes:
+    - stage: copy_generate
+      payload_version: 1
+      required_fields:
+        - seller_id
+        - account_id
+        - contact_id
+        - evidence_ids
+      optional_fields:
+        - channel
+        - language
+        - sequence_no
+        - variant_no
+      defaults:
+        channel: email
+        language: en
+        sequence_no: 1
+        variant_no: 1
+
+    - stage: approval_request
+      payload_version: 1
+      required_fields:
+        - draft_id
+
+  produces:
+    - stage: approval_request
+      payload_version: 1
+      source: copy_generate
+      payload_fields:
+        - draft_id
+
+    - stage: sending_dispatch
+      payload_version: 1
+      source: approval_request
+      condition: "ApprovalDecision.status == approved"
+      payload_fields:
+        - draft_id
+        - decision_id
+
+    - stage: "parked:rejected"
+      payload_version: 1
+      source: approval_request
+      condition: "ApprovalDecision.status == rejected"
+      payload_fields:
+        - draft_id
+        - decision_id
+
+    - stage: "parked:needs_rewrite"
+      payload_version: 1
+      source: approval_request
+      condition: "ApprovalDecision.status == needs_rewrite"
+      payload_fields:
+        - draft_id
+        - decision_id
+
+    - stage: "parked:needs_more_evidence"
+      payload_version: 1
+      source: approval_request
+      condition: "ApprovalDecision.status == needs_more_evidence"
+      payload_fields:
+        - draft_id
+        - decision_id
+
+    - stage: "parked:policy_blocked"
+      payload_version: 1
+      source: copy_generate
+      condition: "policy or claim-evidence checks block progression"
+
+    - stage: "parked:budget_exhausted"
+      payload_version: 1
+      source: copy_generate
+
+    - stage: "parked:contract_error"
+      payload_version: 1
+      source: copy_generate
+
+evidence_digest:
+
+  authority:
+    canonical_table: none
+    source_of_truth:
+      - seller_profiles
+      - accounts
+      - contacts
+      - evidence
+    optional_context:
+      - scorecards
+
+  persistence_rule:
+    mode: "derived_object_only"
+    notes:
+      - "Evidence digest is a view-model / DTO, not a new canonical record."
+      - "Digest may be recomputed on demand."
+      - "Digest may be cached only as a non-authoritative optimization."
+
+  required_shape:
+    seller_summary:
+      required_fields:
+        - seller_id
+        - offer
+        - constraints
+    account_summary:
+      required_fields:
+        - account_id
+        - name
+        - domain
+        - country
+    contact_summary:
+      required_fields:
+        - contact_id
+        - full_name
+        - role
+        - channels
+    evidence_items:
+      item_required_fields:
+        - evidence_id
+        - source_type
+        - url
+        - captured_at
+        - claim_frame
+        - snippet
+    drafting_constraints:
+      required_fields:
+        - policy_pack_id
+        - avoid_claims
+        - allowed_channels
+        - language
+
+  ordering_rules:
+    - "Sort evidence by source trust descending."
+    - "If trust is equal, sort by captured_at descending."
+    - "If still tied, sort by evidence_id lexicographically."
+
+  invariants:
+    - "Digest must only contain facts already present in canonical records."
+    - "Digest must not invent claims, scores, or persona facts."
+    - "Digest must not mutate canonical Evidence records."
+    - "Digest must not include secrets or raw provider credentials."
+    - "Digest must be renderable in the review UI."
+
+copy_generation:
+
+  output_models:
+    draft_model: OutreachDraft
+    anchor_model: PersonalizationAnchor
+
+  output_requirements:
+    draft_required_fields:
+      - draft_id
+      - contact_id
+      - account_id
+      - channel
+      - language
+      - subject
+      - body
+      - risk_flags
+      - created_at
+      - v
+    anchor_required_fields:
+      - draft_id
+      - span
+      - evidence_ids
+
+  deterministic_id_rules:
+    draft_id_formula: "draft:<contact_id>:seq<sequence_no>:v<variant_no>"
+    sequence_variant_source_rule: "sequence_no and variant_no must come from deterministic stage inputs, never DB auto-increment"
+
+  anchor_rules:
+    - "Every non-trivial personalized claim must map to one or more evidence_ids."
+    - "Anchors map text span -> evidence_ids."
+    - "Generic greeting and generic closing lines do not require anchors."
+    - "If a specific claim cannot be anchored, the generator must either strip the claim or mark the draft for review."
+    - "Anchor evidence_ids must already exist in canonical Evidence."
+
+  draft_rules:
+    defaults:
+      channel: email
+      language: en
+    hard_limits:
+      max_drafts_per_contact: 2
+    invariants:
+      - "Do not create a draft for a contact missing canonical contact_id."
+      - "Do not create a draft if required seller/account/contact records are missing."
+      - "Do not embed unsupported quantitative claims."
+      - "Do not claim prior interaction unless CRM evidence exists."
+      - "Do not infer personal attributes."
+      - "Do not create SendAttempt."
+      - "Do not send externally."
+      - "Do not bypass approval workflow."
+
+  claim_evidence_gate:
+    gate_name: DraftClaimEvidenceGate
+    outcomes:
+      PASS: "All specific claims in subject/body are backed by linked evidence_ids."
+      REVIEW: "One or more specific claims lack evidence support."
+    required_rewrite_behavior:
+      - "Strip unsupported claims."
+      - "Or add valid evidence links before approval."
+
+approval_workflow:
+
+  decision_model: ApprovalDecision
+
+  decision_statuses:
+    - approved
+    - rejected
+    - needs_rewrite
+    - needs_more_evidence
+
+  required_fields:
+    - decision_id
+    - decision_key
+    - draft_id
+    - status
+    - reviewer_id
+    - reviewer_role
+    - policy_pack_id
+    - decided_at
+
+  optional_fields:
+    - notes
+    - overridden_gates
+
+  deterministic_id_rules:
+    decision_key_formula: "sha256(work_item_id|contact_id|action_type|policy_pack_id|draft_id)"
+    decision_id_formula: "decision:<draft_id>:<decision_key>"
+
+  reviewer_roles:
+    - viewer
+    - operator
+    - admin
+
+  authority_rules:
+    viewer:
+      may_record_decision: false
+      may_request_rewrite: false
+      may_approve_send: false
+
+    operator:
+      may_record_decision: true
+      allowed_statuses:
+        - approved
+        - rejected
+        - needs_rewrite
+        - needs_more_evidence
+      may_override_review_outcomes:
+        - FitScoreGate
+        - EvidenceGate
+        - RoleRelevance
+      may_not_override_stop_outcomes:
+        - HardSafetyGate
+        - BudgetGate
+        - suppression
+        - complaint
+
+    admin:
+      inherits: operator
+      extra_authority:
+        - "Policy pack management is out-of-scope for Epic H UI but role remains canonical."
+
+  routing_rules:
+    approved:
+      next_stage: sending_dispatch
+      payload_version: 1
+      payload_fields:
+        - draft_id
+        - decision_id
+
+    rejected:
+      next_stage: "parked:rejected"
+      payload_version: 1
+      payload_fields:
+        - draft_id
+        - decision_id
+
+    needs_rewrite:
+      next_stage: "parked:needs_rewrite"
+      payload_version: 1
+      payload_fields:
+        - draft_id
+        - decision_id
+
+    needs_more_evidence:
+      next_stage: "parked:needs_more_evidence"
+      payload_version: 1
+      payload_fields:
+        - draft_id
+        - decision_id
+
+  gating_visibility_requirements:
+    - "DraftClaimEvidenceGate outcome must be visible before final approval."
+    - "EvidenceGate outcome must be visible before final approval."
+    - "ContactabilityGate outcome must be visible before final approval."
+    - "Any STOP-class gate must be visible and non-overridable in UI."
+    - "send_enabled=false does not block recording an approval decision, but it does block actual sending downstream."
+
+review_ui:
+
+  purpose: "Reviewer approves or rejects a draft with full evidence context on one screen."
+
+  required_panels:
+    - draft_preview
+    - evidence_digest
+    - anchor_list
+    - evidence_cards
+    - gate_outcomes
+    - decision_controls
+
+  evidence_card_required_fields:
+    - evidence_id
+    - claim_frame
+    - snippet
+    - url
+    - source_type
+    - captured_at
+
+  interaction_rules:
+    - "Clicking an anchor filters or highlights the linked evidence cards."
+    - "Reviewer can approve, reject, or request rewrite without leaving the review screen."
+    - "Unanchored or unsupported claims are surfaced as review issues."
+    - "Policy-blocking gates cannot be hidden by the UI."
+    - "Review UI must load by draft_id only; no hidden dependency on raw provider payloads."
+    - "Evidence cards must be derived from canonical Evidence, not from generated prose."
+
+  explicit_non_goals:
+    - "No inbox."
+    - "No sending console."
+    - "No provider dashboards."
+    - "No reply threading."
+
+idempotency_and_replay:
+
+  copy_generate:
+    uniqueness_basis:
+      - contact_id
+      - sequence_no
+      - variant_no
+      - channel
+      - language
+      - sorted_evidence_ids
+      - policy_pack_id
+    replay_behavior: "Return existing draft+anchors or deterministic overwrite; never create duplicate drafts for identical deterministic inputs."
+
+  approval_request:
+    uniqueness_basis:
+      - decision_key
+    replay_behavior: "Lookup by decision_key and reuse existing decision_id."
+
+  transaction_rules:
+    - "Commit OutreachDraft and PersonalizationAnchor rows before enqueueing approval_request."
+    - "Commit ApprovalDecision before enqueueing any downstream stage."
+    - "Replay must not create duplicate drafts, duplicate anchors, or duplicate decisions."
+
+structured_events:
+
+  required_event_kinds:
+    - evidence_digest_built
+    - draft_generated
+    - draft_flagged_for_review
+    - approval_recorded
+    - work_item_completed
+    - work_item_parked
+    - work_item_failed_contract
+    - work_item_failed_transient
+
+  redaction_rules:
+    - "Never log full email addresses."
+    - "Never log full message bodies."
+    - "Log draft_id, contact_id, claim hashes, evidence_ids, gate outcomes, and status changes only."
+
+  minimum_refs:
+    - work_item_id
+    - entity_ref
+    - draft_id
+    - contact_id
+    - evidence_ids
+    - decision_id
+
+errors_and_parking:
+
+  contract_error:
+    action: "park immediately"
+    examples:
+      - "missing seller/account/contact canonical record"
+      - "missing required payload field"
+      - "unsupported payload_version"
+      - "anchor references non-existent evidence_id"
+
+  transient_error:
+    action: "retry while budget remains"
+
+  budget_exhausted:
+    action: "park with explicit reason"
+
+  policy_blocked:
+    action: "park with explicit reason"
+
+  needs_human:
+    action: "route to review lane"
+
+  no_signal:
+    action: "treat as contract_error in Epic H unless a later contract defines a valid no-op review outcome"
+
+acceptance_invariants:
+
+  h1_evidence_digest_builder:
+    - "Given seller_id + account_id + contact_id + evidence_ids, the UI renders a compact evidence digest."
+    - "Digest content is derived solely from canonical records."
+
+  h2_copy_generator_v0:
+    - "Generating a draft creates one OutreachDraft plus one-or-more PersonalizationAnchors."
+    - "Each personalized claim in the draft is traceable to evidence_ids."
+    - "Replay of the same copy_generate WorkItem does not duplicate drafts or anchors."
+
+  h3_approval_workflow:
+    - "ApprovalDecision is stored as an explicit canonical record."
+    - "Decision status deterministically drives the next stage or parked outcome."
+    - "Replay of the same approval action reuses decision_id via decision_key."
+
+  h4_review_ui:
+    - "Reviewer can inspect anchor-linked evidence cards inline."
+    - "Reviewer can record approved/rejected/needs_rewrite/needs_more_evidence without leaving the review screen."
+    - "Approval does not require hunting for external context."
+
+forbidden_implementation_shortcuts:
+  - "Do not introduce a new canonical EvidenceDigest table."
+  - "Do not generate unanchored personalization claims."
+  - "Do not store approval as an unstructured text note only."
+  - "Do not create SendAttempt in Epic H."
+  - "Do not rely on DB auto-increment for deterministic draft identity."
+  - "Do not hide STOP-class gate failures behind UI affordances."

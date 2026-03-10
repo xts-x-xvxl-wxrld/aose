@@ -1,0 +1,752 @@
+# docs/epics/epic-b/CONTRACT-B.yaml
+# Epic B contract: Data Spine v0.1 as database truth. Prompts must not override these decisions.
+
+epic:
+  id: epic-b
+  name: "Data Spine v0.1 as database truth"
+  version: "0.1"
+  date: "2026-03-08"
+  goal:
+    - "Persist WorkItems and canonical records in Postgres as the system of record"
+    - "Freeze deterministic identifiers, normalization rules, and fallback precedence"
+    - "Make replay-safe processing possible through canonical IDs and idempotency fields"
+    - "Store enough canonical structure to support later orchestration without schema drift"
+  non_goals:
+    - "No separate Trace table in Epic B"
+    - "No StructuredEvent table in Epic B"
+    - "No queue consumer/routing implementation in Epic B"
+    - "No real outbound sending; send must remain disabled"
+    - "No provider-specific side effects or mailbox probing"
+    - "No speculative merge engine beyond deterministic IDs and alias persistence"
+
+authority:
+  contract_precedence:
+    - "docs/epics/epic-b/CONTRACT-B.yaml"
+    - "docs/epics/epic-b/SPEC-Bx.md for the active ticket"
+    - "docs/epics/epic-a/CONTRACT-A.yaml and existing repo scaffold"
+    - "execution prompt for scope only"
+  rules:
+    - "Prompts may narrow scope but may not redefine contract values."
+    - "If a prompt conflicts with this contract, this contract wins."
+    - "If required data is missing here, do not invent it; open or reference a placeholder."
+
+dependencies:
+  requires_epic_a:
+    - "Repo scaffold from Epic A exists"
+    - "api/, worker/, web/, docs/ layout already exists"
+    - "Postgres migration path already exists under api/"
+    - "Epic A verification toolchain remains the required execution path"
+
+defaults:
+  policy_pack_id: "safe_v0_1"
+  send_enabled: false
+  send_provider_enum: "SEND_SRC_01"
+  send_mode: "sandbox_log_sink_only"
+  external_send_side_effects: "forbidden"
+  evidence_retention_days: 180
+
+normalization_rules:
+  hash_function: "sha256_hex_utf8"
+  join_delimiter: "|"
+
+  domain_normalization:
+    - "trim whitespace"
+    - "if input is a URL, parse host and discard scheme/path/query/fragment"
+    - "lowercase"
+    - "remove port"
+    - "remove trailing dot"
+    - "strip exactly one leading 'www.'"
+    - "convert host to IDNA ASCII"
+    - "empty result => null"
+
+  email_normalization:
+    - "trim whitespace"
+    - "split on '@'; invalid split => null"
+    - "lowercase local part"
+    - "normalize domain using domain_normalization"
+    - "rejoin as '<local>@<normalized_domain>'"
+    - "do not remove plus-tags"
+    - "do not remove dots"
+    - "invalid result => null"
+
+  linkedin_url_normalization:
+    - "trim whitespace"
+    - "lowercase scheme and host"
+    - "remove query string and fragment"
+    - "remove trailing slash"
+    - "keep path as identity-bearing component"
+    - "invalid result => null"
+
+canonical_enums:
+  stages:
+    - "seller_profile_build"
+    - "query_objects_generate"
+    - "account_discovery"
+    - "intent_fit_scoring"
+    - "people_search"
+    - "contact_enrichment"
+    - "copy_generate"
+    - "approval_request"
+    - "sending_dispatch"
+
+  parked_stage_prefix: "parked:"
+
+  gate_outcomes:
+    - "PASS"
+    - "REVIEW"
+    - "STOP"
+
+  approval_statuses:
+    - "approved"
+    - "rejected"
+    - "needs_rewrite"
+    - "needs_more_evidence"
+
+  email_validation_levels:
+    - "unverified"
+    - "syntax_ok"
+    - "domain_ok"
+    - "provider_verified"
+    - "human_verified"
+
+  linkedin_validation_levels:
+    - "unverified"
+    - "profile_exists"
+    - "human_verified"
+
+  evidence_categories:
+    - "firmographic"
+    - "persona_fit"
+    - "trigger"
+    - "technographic"
+
+  error_codes:
+    - "contract_error"
+    - "transient_error"
+    - "budget_exhausted"
+    - "no_signal"
+    - "policy_blocked"
+    - "needs_human"
+
+  account_alias_types:
+    - "registry"
+    - "domain"
+    - "legal_name_normalized"
+
+  deferred_account_alias_types:
+    - "address_normalized"
+
+  contact_alias_types:
+    - "email_normalized"
+    - "linkedin_url_normalized"
+
+canonical_ids:
+  seller_id:
+    formula: "seller:<seller_slug>"
+
+  account_id:
+    precedence:
+      - "account:<COUNTRY>-<REGISTRY_ID>"
+      - "account:<normalized_domain>"
+      - "account:tmp:<sha256(country|legal_name_normalized|source_provider|source_ref)>"
+    notes:
+      - "Use registry-based ID whenever country and registry_id exist."
+      - "Use domain-based ID only when registry ID is absent."
+      - "Use tmp hash only when both registry ID and normalized domain are absent."
+      - "country must be uppercase ISO-like code."
+      - "registry_id must be stored in normalized string form exactly as emitted by the chosen normalization helper."
+
+  contact_id:
+    precedence:
+      - "contact:<account_id>:<normalized_email>"
+      - "contact:<account_id>:<sha256(normalized_linkedin_url)>"
+    notes:
+      - "No third fallback in Epic B."
+      - "If both email and LinkedIn are missing, do not create a canonical Contact; park as needs_human or fail contract depending on stage."
+
+  evidence_id:
+    formula: "evidence:<sha256(source_type|canonical_url|captured_at_iso|sha256(snippet_text_or_empty))>"
+
+  draft_id:
+    formula: "draft:<contact_id>:seq<sequence_no>:v<variant_no>"
+    notes:
+      - "sequence_no and variant_no must come from deterministic stage inputs, never DB auto-increment."
+
+  decision_key:
+    formula: "sha256(work_item_id|contact_id|action_type|policy_pack_id|draft_id)"
+
+  decision_id:
+    formula: "decision:<draft_id>:<decision_key>"
+
+  send_id:
+    formula: "send:<draft_id>:<channel>"
+
+  send_idempotency_key:
+    formula: "send:<draft_id>:<channel>:v1"
+
+identity_and_dedup:
+  account_dedup_keys:
+    primary: "country + registry_id"
+    secondary: "normalized_domain"
+    tertiary_deferred: "name + address"
+
+  contact_dedup_keys:
+    primary: "normalized_email"
+    secondary: "linkedin_url"
+    tertiary_deferred: "name + account_id + role_cluster"
+
+  merge_precedence:
+    - "higher-trust source wins"
+    - "if equal trust, newer capture wins"
+    - "if still tied, stable lexicographic tie-breaker on source id"
+
+  upgrade_rules:
+    account:
+      - "If a domain-based account later gains a registry identifier, canonical identity upgrades to the registry-based ID."
+      - "The prior domain must remain preserved as an alias."
+    contact:
+      - "Alias persistence must allow identity upgrade without rewriting history."
+
+source_trust_ranking:
+  - "registry/api"
+  - "first-party site"
+  - "official profiles"
+  - "reputable directories"
+  - "general web extracts"
+
+provider_derived_fields:
+  required_fields:
+    - "source_provider"
+    - "source_ref"
+    - "observed_at"
+    - "confidence"
+  confidence_range: "0.0..1.0"
+
+work_item:
+  model_name: "WorkItem"
+  table_name: "work_items"
+
+  required_fields:
+    - "work_item_id"
+    - "entity_ref_type"
+    - "entity_ref_id"
+    - "stage"
+    - "payload_json"
+    - "payload_version"
+    - "attempt_budget_remaining"
+    - "attempt_budget_policy"
+    - "idempotency_key"
+    - "trace_run_id"
+    - "trace_parent_work_item_id"
+    - "trace_correlation_id"
+    - "trace_policy_pack_id"
+    - "created_at"
+
+  trace_shape:
+    run_id: "string"
+    parent_work_item_id: "string|null"
+    correlation_id: "string"
+    policy_pack_id: "string"
+
+  behavioral_invariants:
+    - "stage routes work; unsupported stage is a contract error."
+    - "payload is versioned via payload_version / payload.v."
+    - "attempt budget caps retries and exploration."
+    - "idempotency_key enables replay safety."
+    - "trace.correlation_id remains stable for a given entity."
+
+  explicit_non_goals_for_epic_b:
+    - "No separate Trace table."
+    - "No StructuredEvent table."
+    - "Structured events are deferred to Epic C."
+
+stage_payload_contracts:
+  payload_versioning_required: true
+
+  seller_profile_build:
+    payload_contract: "seller raw inputs or seller_id reference"
+
+  query_objects_generate:
+    payload_contract: "seller_id"
+
+  account_discovery:
+    payload_contract: "query_object_id (+ optional adapter plan)"
+
+  intent_fit_scoring:
+    payload_contract: "account_id (+ evidence digest refs)"
+
+  people_search:
+    payload_contract: "account_id (+ role targets)"
+
+  contact_enrichment:
+    payload_contract: "contact_id (+ validations requested)"
+
+  copy_generate:
+    payload_contract: "seller_id + account_id + contact_id + evidence_ids"
+
+  approval_request:
+    payload_contract: "draft_id"
+
+  sending_dispatch:
+    payload_contract: "draft_id + decision_id"
+
+  parked:
+    payload_contract: "parked:<reason_code>"
+
+canonical_models:
+  - class: "SellerProfile"
+    table: "seller_profiles"
+
+  - class: "QueryObject"
+    table: "query_objects"
+
+  - class: "Account"
+    table: "accounts"
+
+  - class: "AccountAlias"
+    table: "account_aliases"
+
+  - class: "Evidence"
+    table: "evidence"
+
+  - class: "EvidenceContent"
+    table: "evidence_contents"
+
+  - class: "Scorecard"
+    table: "scorecards"
+
+  - class: "Contact"
+    table: "contacts"
+
+  - class: "ContactAlias"
+    table: "contact_aliases"
+
+  - class: "OutreachDraft"
+    table: "outreach_drafts"
+
+  - class: "PersonalizationAnchor"
+    table: "personalization_anchors"
+
+  - class: "ApprovalDecision"
+    table: "approval_decisions"
+
+  - class: "SendAttempt"
+    table: "send_attempts"
+
+canonical_record_shapes:
+  seller_profile:
+    class: "SellerProfile"
+    table: "seller_profiles"
+    required_fields:
+      - "seller_id"
+      - "offer"
+      - "constraints"
+      - "created_at"
+      - "v"
+    offer_fields:
+      - "what"
+      - "where"
+      - "who"
+      - "positioning"
+    constraint_fields:
+      - "avoid_claims"
+      - "allowed_channels"
+      - "languages"
+    policy_touchpoints:
+      - "policy_pack_id safe_v0_1 applies"
+      - "constraints.avoid_claims must align with policy pack"
+    notes:
+      - "SellerProfile is the source object for generating QueryObjects."
+
+  query_object:
+    class: "QueryObject"
+    table: "query_objects"
+    required_fields:
+      - "query_object_id"
+      - "seller_id"
+      - "buyer_context"
+      - "priority"
+      - "keywords"
+      - "exclusions"
+      - "rationale"
+      - "v"
+    notes:
+      - "Structured search intent, not prose."
+      - "Rationale is audit-facing, not copy-facing."
+
+  account:
+    class: "Account"
+    table: "accounts"
+    required_fields:
+      - "account_id"
+      - "name"
+      - "domain"
+      - "country"
+      - "provenance"
+      - "evidence_ids"
+      - "confidence"
+      - "status"
+      - "v"
+    alias_buckets:
+      - "registry"
+      - "domains"
+      - "legal_names"
+    notes:
+      - "Promotion to target occurs when scorecard thresholds and dedup pass."
+      - "Canonical ID follows the frozen precedence in canonical_ids.account_id."
+
+  account_alias:
+    class: "AccountAlias"
+    table: "account_aliases"
+    alias_types:
+      registry:
+        shape: "{ source, id }"
+      domain:
+        shape: "normalized domain string"
+      legal_name_normalized:
+        shape: "normalized legal name string"
+    deferred_alias_types:
+      - "address_normalized"
+
+  evidence:
+    class: "Evidence"
+    table: "evidence"
+    required_fields:
+      - "evidence_id"
+      - "source_type"
+      - "url"
+      - "captured_at"
+      - "snippet"
+      - "claim_frame"
+      - "provenance"
+      - "content_ref"
+      - "v"
+    notes:
+      - "Evidence is pointer-first."
+      - "Always store url + snippet + claim_frame."
+      - "Model inference never becomes Evidence by itself."
+
+  evidence_content:
+    class: "EvidenceContent"
+    table: "evidence_contents"
+    required_fields:
+      - "evidence_content_id"
+      - "content_hash"
+      - "kind"
+      - "text"
+      - "raw_ref"
+      - "captured_at"
+      - "v"
+    capture_policy:
+      - "Store extracts by default for high-trust sources."
+      - "Store pointer-only for low-trust/noisy sources unless promoted to target or required by a draft anchor."
+      - "Raw snapshots remain optional in v0.1."
+
+  scorecard:
+    class: "Scorecard"
+    table: "scorecards"
+    required_fields:
+      - "scorecard_id"
+      - "entity_ref"
+      - "fit"
+      - "intent"
+      - "computed_at"
+      - "v"
+    fit_fields:
+      - "score"
+      - "confidence"
+      - "reasons"
+    intent_fields:
+      - "score"
+      - "confidence"
+      - "reasons"
+    notes:
+      - "Fit and intent remain separate."
+      - "Every reason object stores text plus evidence_ids."
+
+  contact:
+    class: "Contact"
+    table: "contacts"
+    required_fields:
+      - "contact_id"
+      - "account_id"
+      - "full_name"
+      - "role"
+      - "channels"
+      - "provenance"
+      - "status"
+      - "v"
+    role_fields:
+      - "cluster"
+      - "title"
+      - "confidence"
+    channel_fields:
+      - "type"
+      - "value"
+      - "validated"
+      - "validated_at"
+      - "source_trace"
+    notes:
+      - "Channel validation is explicit-level, not boolean."
+      - "Minimum automated email validation level is domain_ok."
+      - "Canonical ID follows the frozen precedence in canonical_ids.contact_id."
+
+  contact_alias:
+    class: "ContactAlias"
+    table: "contact_aliases"
+    alias_types:
+      - "email_normalized"
+      - "linkedin_url_normalized"
+    identity_priority:
+      primary: "normalized_email"
+      secondary: "normalized_linkedin_url"
+
+  outreach_draft:
+    class: "OutreachDraft"
+    table: "outreach_drafts"
+    required_fields:
+      - "draft_id"
+      - "contact_id"
+      - "account_id"
+      - "channel"
+      - "language"
+      - "subject"
+      - "body"
+      - "anchors"
+      - "risk_flags"
+      - "created_at"
+      - "v"
+    notes:
+      - "Anchors link text spans to evidence IDs."
+      - "Draft IDs are deterministic from contact_id, sequence_no, and variant_no."
+
+  personalization_anchor:
+    class: "PersonalizationAnchor"
+    table: "personalization_anchors"
+    required_fields:
+      - "span"
+      - "evidence_ids"
+    requirement:
+      - "Every personalization anchor maps a text span to one or more evidence_ids."
+
+  approval_decision:
+    class: "ApprovalDecision"
+    table: "approval_decisions"
+    required_fields:
+      - "decision_id"
+      - "draft_id"
+      - "status"
+      - "reviewer"
+      - "notes"
+      - "decided_at"
+      - "v"
+    status_enum_ref: "canonical_enums.approval_statuses"
+    policy_touchpoints:
+      - "decision_key"
+      - "policy_pack_id"
+      - "reviewer_id"
+      - "reviewer_role"
+      - "overridden_gates[]"
+
+  send_attempt:
+    class: "SendAttempt"
+    table: "send_attempts"
+    required_fields:
+      - "send_id"
+      - "draft_id"
+      - "channel"
+      - "provider"
+      - "status"
+      - "provider_message_id"
+      - "idempotency_key"
+      - "created_at"
+      - "v"
+    policy_touchpoints:
+      - "provider enum"
+      - "policy_pack_id"
+    notes:
+      - "Sending is the highest-risk side effect."
+      - "Idempotency must be strict."
+      - "send_enabled=false means external send side effects remain forbidden in Epic B."
+
+validation_and_policy_touchpoints:
+  email_validation_minimum_for_automated_flow: "domain_ok"
+  linkedin_validation_levels_ref: "canonical_enums.linkedin_validation_levels"
+  decision_model:
+    - "PASS: automatic progression is allowed."
+    - "REVIEW: route to human review/approval; no sending."
+    - "STOP: park immediately; no overrides for safety-critical blocks."
+  policy_pack_ref: "safe_v0_1"
+
+linkage_semantics:
+  account_aliases:
+    registry:
+      shape: "{ source, id }"
+    domain:
+      shape: "normalized domain string"
+    legal_name_normalized:
+      shape: "normalized legal name string"
+
+  contact_identity:
+    primary: "normalized_email"
+    secondary: "normalized_linkedin_url"
+
+  draft_anchors:
+    requirement: "Every personalization anchor maps a text span to one or more evidence_ids."
+
+  scorecard_reasons:
+    requirement: "Every reason object stores text plus evidence_ids."
+
+error_handling:
+  contract_error:
+    behavior: "park immediately"
+    retries: false
+
+  transient_error:
+    behavior: "retry while budget remains"
+    retries: true
+
+  budget_exhausted:
+    behavior: "park with reason"
+    retries: false
+
+  no_signal:
+    behavior: "park with reason"
+    retries: false
+
+  policy_blocked:
+    behavior: "park with flags"
+    retries: false
+
+  needs_human:
+    behavior: "park into review lane"
+    retries: false
+
+pii_and_security_baseline:
+  pii_fields_include:
+    - "email"
+    - "phone"
+    - "person identifiers"
+    - "message bodies"
+  rules:
+    - "Canonical tables may store PII."
+    - "Events remain redacted by default and should reference IDs."
+    - "Never log full email or phone in events; use hashes/domain where needed."
+    - "Never log full message bodies in events."
+    - "Secrets never live in the spine."
+
+tickets:
+  b1:
+    name: "Canonical ID helpers"
+    contract_touchpoints:
+      - "canonical_ids"
+      - "normalization_rules"
+    deliverables:
+      - "ID/normalization module"
+      - "unit tests"
+    acceptance:
+      - "Deterministic ID outputs covered by tests"
+
+  b2:
+    name: "WorkItem persistence"
+    contract_touchpoints:
+      - "work_item"
+    deliverables:
+      - "migration"
+      - "ORM model"
+      - "indexes on stage, idempotency_key, entity_ref"
+    acceptance:
+      - "Create/read WorkItem in admin or API"
+    critical_note:
+      - "Roadmap shorthand says WorkItem + Trace; Epic B contract requires embedded trace fields on WorkItem, not a separate Trace table."
+
+  b3:
+    name: "SellerProfile + QueryObject"
+    contract_touchpoints:
+      - "canonical_record_shapes.seller_profile"
+      - "canonical_record_shapes.query_object"
+    acceptance:
+      - "Can create a seller profile and generate/store query objects"
+
+  b4:
+    name: "Account + AccountAlias"
+    contract_touchpoints:
+      - "canonical_record_shapes.account"
+      - "canonical_record_shapes.account_alias"
+      - "identity_and_dedup"
+    acceptance:
+      - "Can insert an account with aliases; merging may be deferred, but alias storage works"
+
+  b5:
+    name: "Evidence + EvidenceContent"
+    contract_touchpoints:
+      - "canonical_record_shapes.evidence"
+      - "canonical_record_shapes.evidence_content"
+    acceptance:
+      - "Evidence pointer saved with url + snippet + claim_frame"
+
+  b6:
+    name: "Scorecard"
+    contract_touchpoints:
+      - "canonical_record_shapes.scorecard"
+      - "linkage_semantics.scorecard_reasons"
+    acceptance:
+      - "Fit + intent stored, reasons link to evidence IDs"
+
+  b7:
+    name: "Contact + ContactAlias"
+    contract_touchpoints:
+      - "canonical_record_shapes.contact"
+      - "canonical_record_shapes.contact_alias"
+      - "canonical_ids.contact_id"
+    acceptance:
+      - "Can store contact with email or LinkedIn fallback"
+
+  b8:
+    name: "OutreachDraft + PersonalizationAnchor"
+    contract_touchpoints:
+      - "canonical_record_shapes.outreach_draft"
+      - "canonical_record_shapes.personalization_anchor"
+      - "linkage_semantics.draft_anchors"
+    acceptance:
+      - "Draft stored, anchors map sentences to evidence IDs"
+
+  b9:
+    name: "ApprovalDecision + SendAttempt"
+    contract_touchpoints:
+      - "canonical_record_shapes.approval_decision"
+      - "canonical_record_shapes.send_attempt"
+      - "canonical_ids.decision_key"
+      - "canonical_ids.send_idempotency_key"
+    acceptance:
+      - "Approval state transition recorded; send attempts are idempotent by key"
+
+verification:
+  repo_rules:
+    - "Stay inside the Epic A scaffold."
+    - "Do not create new root-level shared packages."
+    - "Reuse existing API package layout and Alembic migration path."
+    - "Run Epic A containerized verification commands relevant to changed files."
+
+  minimum_checks_for_epic_b:
+    - "Schema/model tests pass"
+    - "Deterministic ID tests pass"
+    - "Replay-relevant uniqueness behavior is covered where side-effect tables exist"
+    - "No separate Trace table exists in Epic B"
+    - "No StructuredEvent table exists in Epic B"
+
+deferred_items:
+  - "StructuredEvent table and event logger"
+  - "Replay endpoint"
+  - "Queue worker routing"
+  - "Address normalization for account tertiary dedup"
+  - "Raw snapshot storage requirements"
+  - "Deep email verification provider choice and policy"
+  - "Reply ingestion"
+  - "Final retention windows beyond current defaults"
+
+placeholders:
+  allowed:
+    - "PH-EPIC-B-001: scoring version identifier if Scorecard ID formula is later frozen beyond current examples"
+    - "PH-EPIC-B-002: provider enum expansion beyond SEND_SRC_01 if adapters are formalized before Epic C"
+    - "PH-EPIC-B-003: reviewer role model expansion if ApprovalDecision fields are widened beyond single-reviewer flow"

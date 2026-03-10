@@ -1,0 +1,249 @@
+epic_i_contract_version: sending_v0_1_locked
+
+policy_pack_id: safe_v0_1
+
+epic:
+  id: epic-i
+  name: "Sending (gated, sandbox-first)"
+  version: "0.1"
+  date: "2026-03-08"
+
+goal:
+  - "Process only sending_dispatch work items with existing approved draft context."
+  - "Keep sending isolated behind approval, policy gates, and replay-safe idempotency."
+  - "Default to disabled behavior under safe_v0_1."
+  - "Support sandbox/log-sink execution only until provider selection is explicitly decided."
+
+non_goals:
+  - "No real ESP integration."
+  - "No external network send side effects."
+  - "No reply ingestion."
+  - "No mailbox sync."
+  - "No automatic override of STOP gates."
+  - "No provider-specific lifecycle expansion beyond the minimal SendAttempt contract."
+
+depends_on:
+  prior_epics:
+    - epic-b
+    - epic-c
+    - epic-h
+  required_models:
+    - OutreachDraft
+    - ApprovalDecision
+    - SendAttempt
+    - Contact
+    - Account
+  required_placeholder_ids:
+    - PH-001
+
+stage_contract:
+
+  consumed_stage: sending_dispatch
+  payload_versions_supported:
+    - 1
+
+  required_payload_fields:
+    - draft_id
+    - decision_id
+
+  payload_shape_v1:
+    draft_id: string
+    decision_id: string
+
+  preconditions:
+    - "ApprovalDecision.status == approved"
+    - "ApprovalDecision.policy_pack_id == safe_v0_1"
+    - "OutreachDraft exists"
+    - "SendGate == PASS"
+
+  explicit_fail_closed_rules:
+    - "If approval is missing, do not send."
+    - "If any required canonical record is missing, park/fail closed."
+    - "If policy evaluation is incomplete, do not send."
+
+defaults_locked:
+
+  send_enabled: false
+  send_provider_enum: SEND_SRC_01
+  send_mode: sandbox_log_sink_only
+  external_send_side_effects: forbidden
+  placeholder_provider_selection: PH-001
+
+send_attempt_contract:
+
+  model_name: SendAttempt
+  table_name: send_attempts
+
+  required_fields:
+    - send_id
+    - draft_id
+    - channel
+    - provider
+    - status
+    - idempotency_key
+    - policy_pack_id
+    - created_at
+
+  canonical_ids:
+    send_id:
+      formula: "send:<draft_id>:<channel>"
+    idempotency_key:
+      formula: "send:<draft_id>:<channel>:v1"
+
+  locked_fields:
+    provider: SEND_SRC_01
+    policy_pack_id: safe_v0_1
+    initial_status: queued
+
+  uniqueness_constraints:
+    - send_id
+    - idempotency_key
+
+  replay_rule: "Reprocessing the same sending_dispatch work item must be a no-op or deterministic reuse of the existing SendAttempt row."
+
+approval_contract:
+
+  required_status: approved
+
+  required_fields_present:
+    - decision_key
+    - reviewer_id
+    - reviewer_role
+    - policy_pack_id
+
+  override_rules:
+    may_override_review_outcomes_only:
+      - FitScoreGate
+      - EvidenceGate
+      - RoleRelevance
+    must_not_override_stop_outcomes:
+      - HardSafetyGate
+      - BudgetGate
+      - suppression_or_complaint_blocks
+
+policy_gates:
+
+  gate_order:
+    - HardSafetyGate
+    - BudgetGate
+    - DataQualityGate
+    - EvidenceGate
+    - FitScoreGate
+    - ContactabilityGate
+    - DraftClaimEvidenceGate
+    - SendGate
+
+  send_gate_requires:
+    - "send_enabled == true"
+    - "ApprovalDecision exists"
+    - "All STOP gates are clear"
+
+  stop_conditions:
+    - "missing website/domain AND missing unique company identifier"
+    - "target channel is a free email domain"
+    - "suppression hit in global_dnc, complaint_suppression, or campaign_suppression"
+    - "only a generic mailbox exists for the contact"
+    - "email confidence < 0.60"
+    - "email explicitly invalid"
+
+  review_conditions:
+    - "evidence_count < 2 distinct categories"
+    - "role/title ambiguous and no LinkedIn URL"
+    - "email confidence is 0.60..0.79"
+    - "any specific draft claim lacks linked Evidence IDs"
+
+  pass_conditions:
+    - "email confidence >= 0.80"
+    - "required evidence and approval conditions satisfied"
+    - "no STOP gate active"
+
+rate_limits_when_send_enabled:
+
+  max_sends_per_day: 20
+  max_sends_per_hour: 5
+  max_sends_per_target_domain_per_24h: 1
+
+  behavior_on_limit_hit:
+    - "Do not create a duplicate SendAttempt."
+    - "Park/fail closed deterministically."
+    - "No burst bypasses."
+
+timeouts_and_retries:
+
+  timeout_seconds: 20
+  retry_count_transient: 2
+  backoff_seconds:
+    - 2
+    - 8
+
+  retry_rules:
+    transient_error: "retry while budget remains"
+    contract_error: "no retry"
+    budget_exhausted: "park"
+    policy_blocked: "park"
+    needs_human: "park"
+
+compliance_hooks:
+
+  suppression_sources:
+    - global_dnc
+    - campaign_suppression
+    - complaint_suppression
+    - bounced_suppression
+
+  unsubscribe:
+    token_placeholder_required: true
+    token_generation: deferred
+    list_enforcement_required_before_real_send: true
+
+  redaction_rules:
+    - "Never log full email or phone; log hashes and domain only."
+    - "Never log full message bodies; log template_id, claim hashes, and evidence IDs only."
+
+sandbox_behavior:
+
+  allowed_actions:
+    - "Create or reuse SendAttempt exactly once per idempotency_key."
+    - "Write redacted structured events/outcomes."
+    - "Write to sandbox log sink only."
+
+  forbidden_actions:
+    - "Real ESP/API delivery."
+    - "External network calls for send."
+    - "Mailbox probing."
+    - "Reply ingestion."
+
+routing_outcomes:
+
+  when_send_disabled:
+    outcome: "park safely"
+    create_send_attempt: false
+
+  when_policy_blocked:
+    outcome: "park safely"
+    create_send_attempt: false
+
+  when_transient_error_and_budget_remains:
+    outcome: "retry_with_backoff"
+
+  when_budget_exhausted:
+    outcome: "park"
+
+  when_send_allowed_in_sandbox:
+    outcome: "create_or_reuse_send_attempt_then_log_sink"
+
+verification_contract:
+
+  acceptance_checks:
+    - "Attempting to send with send_enabled=false parks safely."
+    - "Replay of the same work item does not create duplicate SendAttempt rows."
+    - "Sandbox path creates at most one SendAttempt per idempotency_key."
+    - "Throttle config prevents bursts."
+    - "Suppression enforcement cannot be overridden."
+    - "Unsupported claims force REVIEW before send."
+
+implementation_guardrails:
+  - "Do not add new canonical tables for Epic I."
+  - "Use existing Data Spine identifiers and ApprovalDecision/SendAttempt records."
+  - "Do not invent provider-specific enums beyond SEND_SRC_01 placeholder."
+  - "Do not weaken safe_v0_1 defaults inside prompts or code."

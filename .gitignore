@@ -21,3 +21,7 @@ dist-ssr/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local AI tooling
+.claude/
+CLAUDE.md

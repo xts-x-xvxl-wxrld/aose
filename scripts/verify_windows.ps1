@@ -1,5 +1,53 @@
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeStep {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Command,
+        [Parameter(Mandatory = $true)]
+        [string]$FailureMessage
+    )
+
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host $FailureMessage
+        exit $LASTEXITCODE
+    }
+}
+
+function Start-DockerDesktopIfNeeded {
+    $dockerInfo = Get-Command "docker" -ErrorAction SilentlyContinue
+    if (-not $dockerInfo) {
+        return $false
+    }
+
+    docker info | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    $dockerDesktopPath = Join-Path $Env:ProgramFiles "Docker\Docker\Docker Desktop.exe"
+    if (-not (Test-Path $dockerDesktopPath)) {
+        Write-Host "Docker Desktop executable not found at $dockerDesktopPath"
+        return $false
+    }
+
+    Write-Host "Docker daemon is not reachable. Starting Docker Desktop..."
+    Start-Process -FilePath $dockerDesktopPath | Out-Null
+
+    for ($attempt = 1; $attempt -le 30; $attempt++) {
+        Start-Sleep -Seconds 2
+        docker info | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Docker daemon is available."
+            return $true
+        }
+    }
+
+    Write-Host "Docker Desktop did not become ready in time."
+    return $false
+}
+
 function Run-PythonFallback {
     Write-Host "Docker is not available. Falling back to python local verification."
 
@@ -53,13 +101,23 @@ function Run-PythonFallback {
 
 # Check for Docker
 $dockerExists = Get-Command "docker" -ErrorAction SilentlyContinue
+$dockerUsable = $false
 
 if ($dockerExists) {
+    $dockerUsable = Start-DockerDesktopIfNeeded
+    if (-not $dockerUsable) {
+        Write-Host "Docker is installed but the daemon is not accessible. Falling back to python local verification."
+    }
+}
+
+if ($dockerUsable) {
     Write-Host "Docker found. Running via docker compose..."
-    try {
-        docker compose up -d --build
-    } catch {
-        Write-Host "Docker compose failed."
+    Invoke-NativeStep -Command { docker compose up -d --build } -FailureMessage "Docker compose failed."
+
+    $runningApi = docker compose ps --services --filter status=running api
+    $apiPsExitCode = $LASTEXITCODE
+    if ($apiPsExitCode -ne 0 -or -not ($runningApi -contains "api")) {
+        Write-Host "API container is not running after docker compose up."
         exit 1
     }
 
@@ -90,18 +148,14 @@ if ($dockerExists) {
     }
 
     Write-Host "Running verification commands..."
-    $hasErrors = $false
+    Invoke-NativeStep -Command { docker compose exec api python -m ruff check . } -FailureMessage "API lint failed."
+    Invoke-NativeStep -Command { docker compose exec worker python -m ruff check . } -FailureMessage "Worker lint failed."
+    Invoke-NativeStep -Command { docker compose exec api python -m ruff format --check . } -FailureMessage "API format check failed."
+    Invoke-NativeStep -Command { docker compose exec worker python -m ruff format --check . } -FailureMessage "Worker format check failed."
+    Invoke-NativeStep -Command { docker compose exec api python -m pytest -q } -FailureMessage "API tests failed."
+    Invoke-NativeStep -Command { docker compose exec worker python -m pytest -q } -FailureMessage "Worker tests failed."
 
-    try { docker compose exec api python -m ruff check .; docker compose exec worker python -m ruff check . } catch { $hasErrors = $true }
-    try { docker compose exec api python -m ruff format --check .; docker compose exec worker python -m ruff format --check . } catch { $hasErrors = $true }
-    try { docker compose exec api python -m pytest -q; docker compose exec worker python -m pytest -q } catch { $hasErrors = $true }
-
-    if ($hasErrors) {
-        Write-Host "Verification Failed."
-        exit 1
-    } else {
-        Write-Host "Verification Passed."
-    }
+    Write-Host "Verification Passed."
 
 } else {
     Run-PythonFallback

@@ -1,0 +1,214 @@
+epic:
+  id: epic-d
+  name: "Thin slice 1: SellerProfile -> QueryObjects"
+  version: "0.1"
+  date: "2026-03-08"
+
+contract_basis:
+  data_spine_version: "v0.1"
+  policy_pack_id: "safe_v0_1"
+  depends_on:
+    - "epic-b contract lock"
+  purpose:
+    - "Create and store SellerProfile records"
+    - "Generate and store QueryObject records from SellerProfile input"
+    - "Allow human review/edit of QueryObjects before discovery"
+
+scope:
+  in_scope:
+    - "D1 SellerProfile API + UI form"
+    - "D2 QueryObject generator (simple heuristic v0)"
+    - "D3 QueryObject review screen"
+  out_of_scope:
+    - "Account discovery"
+    - "External discovery adapters"
+    - "Intent/fit scoring"
+    - "People search"
+    - "Contact enrichment"
+    - "Copy generation"
+    - "Approval workflow"
+    - "Sending"
+    - "Any new canonical record types"
+
+canonical_stage_vocabulary:
+  source_of_truth: "reuse locked stage enum pack from epic-b"
+  allowed_stage_names:
+    - seller_profile_build
+    - query_objects_generate
+    - account_discovery
+    - intent_fit_scoring
+    - people_search
+    - contact_enrichment
+    - copy_generate
+    - approval_request
+    - sending_dispatch
+  in_scope_stage_names:
+    - seller_profile_build
+    - query_objects_generate
+  forbidden:
+    - "Do not invent new stage names for review/edit UI"
+    - "Do not rename existing stage constants"
+    - "Review is a UI/API capability, not a new queue stage"
+
+canonical_models_in_scope:
+  - class: SellerProfile
+    table: seller_profiles
+  - class: QueryObject
+    table: query_objects
+
+seller_profile:
+  canonical_record_shape:
+    required_fields:
+      - seller_id
+      - offer
+      - constraints
+      - created_at
+      - v
+    field_rules:
+      seller_id:
+        formula: "seller:<seller_slug>"
+      offer:
+        required_fields:
+          - what
+          - where
+          - who
+          - positioning
+      constraints:
+        required_fields:
+          - avoid_claims
+          - allowed_channels
+          - languages
+      v:
+        fixed_value: 1
+  allowed_mutations:
+    - "create"
+    - "read"
+    - "update"
+  forbidden:
+    - "Do not replace canonical field names"
+    - "Do not flatten offer/constraints into ad hoc columns in API contracts"
+    - "Do not invent policy fields outside the canonical shape"
+
+query_object:
+  canonical_record_shape:
+    required_fields:
+      - query_object_id
+      - seller_id
+      - buyer_context
+      - priority
+      - keywords
+      - exclusions
+      - rationale
+      - v
+    field_rules:
+      seller_id:
+        linkage: "must reference an existing SellerProfile.seller_id"
+      buyer_context:
+        type: string
+      priority:
+        type: number
+      keywords:
+        type: array
+        item_type: string
+      exclusions:
+        type: array
+        item_type: string
+      rationale:
+        type: string
+      v:
+        fixed_value: 1
+  output_contract:
+    min_count: 3
+    max_count: 10
+    format_rule: "structured query objects only; no prose output"
+  review_contract:
+    editable_fields:
+      - buyer_context
+      - priority
+      - keywords
+      - exclusions
+      - rationale
+    non_editable_without_explicit_migration:
+      - query_object_id
+      - seller_id
+      - v
+  forbidden:
+    - "Do not store freeform narrative instead of structured QueryObjects"
+    - "Do not generate fewer than 3 or more than 10 QueryObjects"
+    - "Do not create QueryObjects detached from seller_id"
+
+generation_rules:
+  generator_version: "simple_heuristic_v0"
+  input_source: "SellerProfile fields only"
+  allowed_inputs:
+    - "offer.what"
+    - "offer.where"
+    - "offer.who"
+    - "offer.positioning"
+    - "constraints.avoid_claims"
+    - "constraints.allowed_channels"
+    - "constraints.languages"
+  required_output_properties:
+    - "priority"
+    - "keywords"
+    - "exclusions"
+    - "rationale"
+  forbidden:
+    - "No external search calls"
+    - "No account discovery during generation"
+    - "No prose blobs"
+    - "No downstream scoring or enrichment side effects"
+
+storage_and_linkage:
+  seller_profile_to_query_object:
+    rule: "QueryObject.seller_id must equal SellerProfile.seller_id"
+  persistence_rule:
+    - "Generate queries action must persist QueryObjects"
+    - "Review edits must persist updated QueryObjects"
+  replay_safety:
+    - "Re-running generation must not invent new schema variants"
+    - "If work items are used, idempotency and trace semantics must reuse epic-b rules"
+    - "No duplicate side effects beyond intended stored QueryObject set"
+
+ui_api_behavior:
+  seller_profile_form:
+    must_support:
+      - "create seller profile"
+      - "edit seller profile"
+      - "load persisted seller profile"
+  generate_queries_action:
+    must_support:
+      - "generate from stored or submitted SellerProfile data"
+      - "store generated QueryObjects"
+  review_screen:
+    must_support:
+      - "list generated QueryObjects"
+      - "edit keywords"
+      - "edit exclusions"
+      - "save changes before discovery"
+  forbidden:
+    - "Do not trigger discovery automatically on save"
+    - "Do not require Epic E components for Epic D acceptance"
+
+acceptance:
+  d1:
+    - "User can create SellerProfile via UI"
+    - "Stored record conforms to canonical SellerProfile shape"
+  d2:
+    - "Clicking generate queries stores 3-10 QueryObjects"
+    - "Each stored QueryObject contains buyer_context, priority, keywords, exclusions, rationale"
+  d3:
+    - "User can edit keywords/exclusions before discovery"
+    - "Edits persist to stored QueryObjects"
+
+non_goals_and_forbidden_assumptions:
+  - "Do not add new canonical enums"
+  - "Do not add new canonical record families"
+  - "Do not introduce discovery-source-specific fields into QueryObject"
+  - "Do not depend on adapter infrastructure from Epic E"
+  - "Do not enable sending or approval behavior"
+
+implementation_note:
+  instruction_precedence:
+    - "This contract lock overrides prompt ambiguity"
+    - "Prompts may implement, but may not redefine, the locked model names, stage names, or record shapes"

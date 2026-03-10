@@ -1,0 +1,302 @@
+epic_g_contract_version: spine_v0_1_people_locked
+
+inherits:
+  epic_b_contract_version: spine_v0_1_locked
+  policy_pack_id: safe_v0_1
+
+epic:
+  id: epic-g
+  name: "People + contact enrichment (minimum viable, safe)"
+  version: "0.1"
+  date: "2026-03-08"
+  goal:
+    - "Create replay-safe Contact and ContactAlias records from manual CSV import and/or people-search adapters."
+    - "Run minimal enrichment only: normalize identifiers and validate email up to domain_ok."
+    - "Enforce deterministic caps so contact discovery and enrichment cannot expand without bound."
+  non_goals:
+    - "No automatic sending."
+    - "No mailbox probing."
+    - "No provider_verified automation."
+    - "No human_verified automation."
+    - "No third fallback identity beyond normalized email or normalized LinkedIn URL."
+    - "No heuristic merge logic beyond canonical ID + alias rules."
+    - "No unsupported scraping assumptions without provenance."
+
+canonical_dependencies:
+  stage_vocabulary_source: "epic_b_contract_version: spine_v0_1_locked"
+  canonical_record_source: "data_spine_v0_1"
+  policy_source: "safe_v0_1"
+
+stage_contracts:
+  people_search:
+    consumes:
+      stage: people_search
+      payload_version: 1
+      required_payload_fields:
+        - account_id
+      optional_payload_fields:
+        - role_targets
+        - adapter_plan
+        - source_mode
+    produces:
+      - stage: contact_enrichment
+        payload_version: 1
+      - stage: "parked:no_signal"
+      - stage: "parked:budget_exhausted"
+      - stage: "parked:needs_human"
+      - stage: "parked:policy_blocked"
+    completion_rule: "Produce zero or more surviving canonical contacts for one account, then enqueue one contact_enrichment WorkItem per surviving contact."
+
+  contact_enrichment:
+    consumes:
+      stage: contact_enrichment
+      payload_version: 1
+      required_payload_fields:
+        - contact_id
+      optional_payload_fields:
+        - validations_requested
+    produces:
+      - stage: copy_generate
+        payload_version: 1
+      - stage: "parked:no_signal"
+      - stage: "parked:budget_exhausted"
+      - stage: "parked:needs_human"
+      - stage: "parked:policy_blocked"
+    completion_rule: "Update one canonical contact with normalized identifiers and validation state, then enqueue copy_generate only when at least one allowed downstream channel remains."
+
+people_search_adapter_interface:
+  interface_name: PeopleSearchAdapter
+  method: "search_people(account_id, role_targets=None) -> ContactCandidate[]"
+
+  contact_candidate_shape:
+    required_fields:
+      - account_id
+      - full_name
+      - provenance
+    at_least_one_identity_field:
+      - email
+      - linkedin_url
+    optional_fields:
+      - role_title
+      - role_cluster
+      - role_confidence
+      - source_provider
+      - source_ref
+      - observed_at
+      - confidence
+
+  provenance_requirements:
+    - source_provider
+    - source_ref
+    - observed_at
+
+  deterministic_output_rules:
+    - "Normalize candidate identity before canonical Contact creation."
+    - "Do not create a Contact when both normalized email and normalized LinkedIn URL are absent."
+    - "If provider confidence is supplied, it must be within 0.0..1.0."
+    - "Adapter output may be replayed; repeated input must resolve to the same canonical Contact and aliases."
+
+manual_contact_import:
+  mode_id: manual_contact_import_v0
+  allowed_source_mode_values:
+    - manual_csv
+    - adapter
+
+  csv_contract:
+    required_columns:
+      - account_id
+      - full_name
+    one_of_required_column_sets:
+      - ["email"]
+      - ["linkedin_url"]
+    optional_columns:
+      - role_title
+      - role_cluster
+      - role_confidence
+      - source_provider
+      - source_ref
+      - observed_at
+      - confidence
+    forbidden_rows:
+      - "missing account_id"
+      - "missing full_name"
+      - "missing both email and linkedin_url"
+      - "unknown account_id"
+
+    defaults:
+      source_provider: "MANUAL_CSV"
+      source_ref: "csv_row:<row_number>"
+      observed_at: "import_timestamp"
+
+  row_to_contact_mapping:
+    account_id: account_id
+    full_name: full_name
+    role.title: role_title
+    role.cluster: role_cluster
+    role.confidence: role_confidence
+    email_channel.value: email
+    linkedin_alias.value: linkedin_url
+
+contact_identity:
+  contact_id_precedence:
+    - "contact:<account_id>:<normalized_email>"
+    - "contact:<account_id>:<sha256(normalized_linkedin_url)>"
+
+  alias_types:
+    - email_normalized
+    - linkedin_url_normalized
+
+  forbidden:
+    - "No third fallback in Epic G."
+    - "Do not create canonical Contact when both normalized_email and normalized_linkedin_url are missing."
+
+  uniqueness_constraints:
+    - "contacts.contact_id unique"
+    - "contact_aliases(account_id, alias_type, alias_value) unique"
+
+role_model:
+  allowed_clusters:
+    - economic_buyer
+    - influencer
+    - gatekeeper
+    - referrer
+
+  quality_rule:
+    review_if:
+      - "role/title is ambiguous and no LinkedIn URL exists"
+    route: "parked:needs_human"
+
+normalization_and_validation:
+  email_normalization: "inherit epic_b email_normalization"
+  linkedin_url_normalization: "inherit epic_b linkedin_url_normalization"
+
+  email_validation_levels_allowed:
+    - unverified
+    - syntax_ok
+    - domain_ok
+    - provider_verified
+    - human_verified
+
+  linkedin_validation_levels_allowed:
+    - unverified
+    - profile_exists
+    - human_verified
+
+  epic_g_enrichment_scope:
+    email:
+      allowed_automated_ceiling: domain_ok
+      checks:
+        - "normalize email"
+        - "syntax check"
+        - "normalize domain"
+        - "DNS/MX check where applicable"
+      forbidden:
+        - "mailbox probing"
+        - "provider_verified automation"
+
+    linkedin:
+      allowed_automated_ceiling: unverified
+      forbidden:
+        - "profile_exists automation unless a trusted toolchain explicitly supports it"
+
+  downstream_minimum_for_automated_flow:
+    email: domain_ok
+
+contact_record_defaults:
+  status: candidate
+  schema_version: 1
+
+  minimum_contact_fields:
+    - contact_id
+    - account_id
+    - full_name
+    - status
+    - v
+
+  minimum_channel_fields:
+    - type
+    - value
+    - validated
+    - validated_at
+    - source_trace
+
+  provider_derived_field_requirements:
+    required_fields:
+      - source_provider
+      - source_ref
+      - observed_at
+      - confidence
+    confidence_range: "0.0..1.0"
+
+caps:
+  inherited_from_policy_pack:
+    max_contacts_total_per_run: 60
+    max_contacts_per_account: 3
+    max_enrich_attempts_per_contact: 2
+    max_providers_per_contact: 2
+    max_drafts_per_contact: 2
+
+  enforcement_rules:
+    contacts_per_account:
+      behavior: "Keep only the highest-confidence surviving contacts per account after deterministic dedup; additional candidates must not be persisted once the cap is reached."
+      park_stage: "parked:budget_exhausted"
+
+    enrich_attempts_per_contact:
+      behavior: "Retry transient enrichment failures only while total attempts for that contact remain below the configured cap."
+      park_stage: "parked:budget_exhausted"
+
+    providers_per_contact:
+      behavior: "Do not query or apply more than two providers per contact across people search + enrichment."
+      park_stage: "parked:budget_exhausted"
+
+idempotency:
+  canonical_write_guards:
+    - "Contact create/update is idempotent on contact_id."
+    - "ContactAlias create/update is idempotent on (account_id, alias_type, alias_value)."
+
+  work_item_keys:
+    people_search:
+      formula: "ppl:<account_id>:<source_mode_or_adapter>:v1"
+    contact_enrichment:
+      formula: "enrich:<contact_id>:email:v1"
+
+  replay_rules:
+    - "Reprocessing the same CSV row or adapter candidate must be a no-op or deterministic overwrite."
+    - "Reprocessing contact_enrichment must not create duplicate contacts, aliases, or channels."
+
+routing_rules:
+  copy_generate_preconditions:
+    - "Canonical Contact exists."
+    - "At least one allowed channel exists."
+    - "For email path, validation level is domain_ok or human_verified."
+    - "No active STOP-condition from HardSafetyGate applies to that channel."
+
+  park_conditions:
+    no_contact_identity:
+      error_code: contract_error
+      stage: "parked:needs_human"
+
+    unknown_account:
+      error_code: contract_error
+      stage: "parked:needs_human"
+
+    free_email_domain_for_send:
+      error_code: policy_blocked
+      stage: "parked:policy_blocked"
+
+    generic_mailbox_only_for_send:
+      error_code: policy_blocked
+      stage: "parked:policy_blocked"
+
+policy_inheritance:
+  send_enabled: false
+  free_email_domains_send_block: true
+  generic_mailbox_send_block: true
+  note: "Epic G may store such contacts, but automatic send eligibility remains blocked by policy."
+
+explicit_non_goals_for_epic_g:
+  - "No mailbox-level deliverability verification."
+  - "No reply ingestion."
+  - "No provider selection beyond stable placeholder IDs."
+  - "No contact scoring model."
+  - "No automatic approval or send transitions."

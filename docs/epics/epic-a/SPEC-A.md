@@ -3,7 +3,7 @@
 ## Purpose
 Create a deterministic local development foundation you stop thinking about: a single monorepo with an API, a worker, a minimal web UI, and docs; reproducible local stack (Postgres + Redis); and CI sanity checks (format, lint, unit tests).
 
-All implementation-level choices (ports, service names, frameworks, exact Make targets, CI runners) are defined in `docs/epics/epic-a/CONTRACT.yaml`. This SPEC defines intent, scope, and acceptance.
+All implementation-level choices (ports, service names, frameworks, exact Make targets, CI runners) are defined in `docs/epics/epic-a/CONTRACT-A.yaml`. This SPEC defines intent, scope, and acceptance.
 
 ## Scope (In)
 A1. Monorepo skeleton
@@ -59,7 +59,7 @@ Services:
 - `docs/` includes system + epic docs, and reserved integration docs:
   - `docs/system/AGENT_RULES.md`
   - `docs/epics/epic-a/SPEC.md`
-  - `docs/epics/epic-a/CONTRACT.yaml`
+  - `docs/epics/epic-a/CONTRACT-A.yaml`
   - `docs/epics/epic-a/PLACEHOLDERS.md`
   - `docs/policy/policy-pack-safe-v0_1.md`
   - `docs/data-spine/DATA-SPINE-v0.1.md`

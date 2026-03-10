@@ -1,0 +1,502 @@
+# docs/epics/epic-c/CONTRACT-C.yaml
+# Epic C contract: deterministic orchestration behavior.
+# Prompts and implementations must not override these decisions.
+
+epic:
+  id: epic-c
+  name: "Orchestration: queue + worker routing"
+  version: "0.1"
+  date: "2026-03-08"
+  goal:
+    - "Worker consumes WorkItems from Redis and routes by canonical stage"
+    - "Routing, retries, parking, and replay are deterministic"
+    - "Handlers are restart-safe and replay-safe"
+    - "Every handler writes structured events/outcomes"
+  non_goals:
+    - "No provider-vendor lock-in"
+    - "No exact retry backoff numbers"
+    - "No exact numeric caps for queries/accounts/contacts/drafts in this contract"
+    - "No changes to Epic B canonical IDs or WorkItem envelope"
+    - "No real outbound sending; send_enabled=false baseline remains in force"
+
+contract:
+  name: epic-c-contract-lock
+  contract_version: spine_v0_1_orchestration_locked
+  policy_pack_id: safe_v0_1
+  scope: epic_c_only
+  authority:
+    higher_than:
+      - "SPEC-C1.md"
+      - "SPEC-C2.md"
+      - "SPEC-C3.md"
+      - "SPEC-C4.md"
+      - "SPEC-C5.md"
+    lower_than:
+      - "future global contract, if intentionally introduced"
+
+inherits:
+  epic_b_contract_version: spine_v0_1_locked
+  frozen_from_epic_b:
+    - "canonical stage strings"
+    - "parked stage prefix"
+    - "error codes"
+    - "WorkItem required fields"
+    - "WorkItem trace shape"
+    - "deterministic IDs"
+    - "idempotency key conventions"
+    - "send_enabled=false baseline"
+
+canonical_enums:
+
+  stages:
+    - seller_profile_build
+    - query_objects_generate
+    - account_discovery
+    - intent_fit_scoring
+    - people_search
+    - contact_enrichment
+    - copy_generate
+    - approval_request
+    - sending_dispatch
+
+  parked_stage_prefix: "parked:"
+
+  error_codes:
+    - contract_error
+    - transient_error
+    - budget_exhausted
+    - no_signal
+    - policy_blocked
+    - needs_human
+
+  structured_event_outcomes:
+    - ok
+    - parked
+    - failed_contract
+    - failed_transient
+    - retry_scheduled
+    - noop
+
+  terminal_outcome_event_types:
+    - work_item_completed
+    - work_item_parked
+    - work_item_failed_contract
+    - work_item_failed_transient
+
+  structured_event_types:
+    - handler_started
+    - handler_succeeded
+    - handler_parked
+    - handler_failed_contract
+    - handler_failed_transient
+    - handler_noop_idempotent
+    - budget_decremented
+    - retry_scheduled
+    - work_item_completed
+    - work_item_parked
+    - work_item_failed_contract
+    - work_item_failed_transient
+
+  attempt_budget_decrement_on:
+    - source_call
+    - model_call
+
+work_item_runtime:
+  inherited_work_item_model: WorkItem
+  inherited_table_name: work_items
+  requires_existing_fields:
+    - work_item_id
+    - entity_ref_type
+    - entity_ref_id
+    - stage
+    - payload_json
+    - payload_version
+    - attempt_budget_remaining
+    - attempt_budget_policy
+    - idempotency_key
+    - trace_run_id
+    - trace_parent_work_item_id
+    - trace_correlation_id
+    - trace_policy_pack_id
+    - created_at
+
+stage_payload_contracts:
+  payload_version_rule:
+    supported_default_versions:
+      - 1
+    unsupported_payload_version: contract_error
+
+  required_payloads:
+    seller_profile_build:
+      required_any_of:
+        - seller_id
+        - seller_raw_inputs
+      payload_versions: [1]
+
+    query_objects_generate:
+      required:
+        - seller_id
+      payload_versions: [1]
+
+    account_discovery:
+      required:
+        - query_object_id
+      optional:
+        - adapter_plan
+      payload_versions: [1]
+
+    intent_fit_scoring:
+      required:
+        - account_id
+      optional:
+        - evidence_digest_refs
+      payload_versions: [1]
+
+    people_search:
+      required:
+        - account_id
+      optional:
+        - role_targets
+      payload_versions: [1]
+
+    contact_enrichment:
+      required:
+        - contact_id
+      optional:
+        - validations_requested
+      payload_versions: [1]
+
+    copy_generate:
+      required:
+        - seller_id
+        - account_id
+        - contact_id
+        - evidence_ids
+      payload_versions: [1]
+
+    approval_request:
+      required:
+        - draft_id
+      payload_versions: [1]
+
+    sending_dispatch:
+      required:
+        - draft_id
+        - decision_id
+      payload_versions: [1]
+
+  missing_required_payload_or_record: contract_error
+  synthesis_rule: "Handlers must not guess missing payload fields or canonical records."
+
+routing:
+
+  router_model: table_driven_explicit_registry
+
+  route_result_types:
+    - handler_dispatch
+    - parked_terminal
+    - contract_failure
+
+  exact_match_rule:
+    enabled: true
+    no_fuzzy_matching: true
+    no_alias_guessing: true
+    no_reflection_discovery: true
+    only_nonexact_prefix_allowed: "parked:"
+
+  parked_stage_rule:
+    match: "stage startswith parked:"
+    behavior:
+      - "do not dispatch to normal handler"
+      - "treat as terminal route"
+      - "ack cleanly"
+      - "preserve parked reason suffix exactly"
+
+  unknown_stage_rule:
+    behavior:
+      error_code: contract_error
+      terminal_event_type: work_item_failed_contract
+      retry_allowed: false
+      park_immediately: true
+      preserve_original_stage: true
+
+  next_stage_rule:
+    description: "Handlers do not call the next handler directly. They enqueue the next WorkItem using a canonical stage."
+
+handler_contract:
+  required_handler_properties:
+    - module_name
+    - module_version
+    - consumes
+    - produces
+    - side_effects
+    - idempotency
+    - budget_spend
+    - v
+
+  consumes_shape:
+    required_keys:
+      - stage
+      - payload_versions
+
+  produces_shape:
+    required_keys:
+      - stage
+      - payload_version
+
+  idempotency_shape:
+    required_keys:
+      - strategy
+    allowed_strategies:
+      - by_work_item_key
+
+  budget_spend_shape:
+    required_keys:
+      - per_item_max_calls
+      - decrement_on
+    decrement_on_must_be_subset_of:
+      - source_call
+      - model_call
+
+  handler_required_behavior:
+    - "Validate payload version before side effects"
+    - "Validate required payload fields before side effects"
+    - "Validate required canonical records before side effects"
+    - "Emit structured events"
+    - "Respect attempt budget policy"
+    - "Respect idempotency guard"
+    - "Return deterministic terminal or handoff outcome"
+
+  handler_forbidden_behavior:
+    - "Do not mutate canonical stage names dynamically"
+    - "Do not call downstream handlers directly"
+    - "Do not invent new error codes"
+    - "Do not write unredacted PII into structured events"
+    - "Do not decrement budget for pure local validation or pure reads"
+
+attempt_budget:
+
+  purpose:
+    - "Prevent runaway retries"
+    - "Prevent unbounded search expansion"
+    - "Bound external/model spend"
+
+  decrement_rule:
+    decrement_only_on:
+      - source_call
+      - model_call
+    do_not_decrement_on:
+      - local_validation
+      - payload_parsing
+      - idempotency_existence_check
+      - db_read_only
+      - routing_decision
+      - structured_event_write
+
+  exhaustion_rule:
+    when_remaining_is_zero:
+      error_code: budget_exhausted
+      stage_result: "parked:budget_exhausted"
+      terminal_event_type: work_item_parked
+      retry_allowed: false
+
+  retry_rules:
+    contract_error:
+      retry_allowed: false
+      terminal_action: "park immediately"
+    transient_error:
+      retry_allowed: true
+      condition: "only while attempt budget remains"
+    budget_exhausted:
+      retry_allowed: false
+      terminal_action: "park immediately"
+    no_signal:
+      retry_allowed: false
+      terminal_action: "park immediately"
+    policy_blocked:
+      retry_allowed: false
+      terminal_action: "park immediately"
+    needs_human:
+      retry_allowed: false
+      terminal_action: "park into review lane"
+
+idempotency:
+
+  baseline_guarantee: "At-least-once processing must not create duplicate side effects."
+
+  required_guard_behavior:
+    before_side_effect_create:
+      - "lookup by idempotency key or replay-stable unique key"
+    if_output_exists:
+      - "become deterministic no-op"
+      - "do not duplicate rows"
+      - "emit handler_noop_idempotent event"
+      - "return success-compatible outcome"
+
+  protected_side_effects_minimum:
+    - "derivative writes owned by a handler"
+    - "outreach_drafts"
+    - "approval_decisions via decision_key reuse"
+    - "send_attempts"
+    - "next-stage enqueue side effects when protected by deterministic uniqueness"
+
+  allowed_replay_results:
+    - "noop against existing output"
+    - "create missing output exactly once"
+    - "re-run safely when no protected output exists yet"
+    - "park again for the same bounded reason"
+    - "fail contract again if input is still invalid"
+
+  forbidden_replay_results:
+    - "duplicate side effects"
+    - "duplicate send_attempts"
+    - "duplicate drafts for the same idempotency key"
+    - "bypass policy checks"
+    - "invent a fresh decision when decision_key already exists"
+
+structured_events:
+
+  model_name: StructuredEvent
+  table_name: structured_events
+
+  required_fields:
+    - event_id
+    - occurred_at
+    - module
+    - work_item_id
+    - entity_ref
+    - stage
+    - event_type
+    - outcome
+    - error_code
+    - counters
+    - refs
+    - v
+
+  field_rules:
+    entity_ref:
+      required_keys:
+        - type
+        - id
+    stage: "must equal the current WorkItem.stage at emission time"
+    event_type: "must be one of canonical_enums.structured_event_types"
+    outcome: "must be one of canonical_enums.structured_event_outcomes"
+    error_code: "null or one of canonical_enums.error_codes"
+    counters: "numeric-only machine metrics"
+    refs: "canonical ids, adapter names, payload version, retry metadata, and other safe machine refs only"
+
+  run_view_requirement:
+    per_entity_recent_events: 20
+
+  terminal_outcome_rule:
+    close_work_item_with_one_of:
+      - work_item_completed
+      - work_item_parked
+      - work_item_failed_contract
+      - work_item_failed_transient
+
+redaction_and_security:
+  inherited_policy_pack: safe_v0_1
+
+  never_log_directly:
+    - full_email_addresses
+    - full_phone_numbers
+    - full_message_bodies
+    - raw_provider_secrets
+    - raw_credentials
+
+  allowed_debug_refs:
+    - canonical_ids
+    - contact_id
+    - evidence_ids
+    - template_id
+    - claim_hashes
+    - safe_hashes
+    - domain_fragments
+    - provider_identifiers
+
+  retention_defaults:
+    structured_events_logs_days: 14
+    pii_tables_months: 12
+    raw_provider_payload_pointers_days: 30
+
+queue_handoff:
+  model: "queue-driven handoff through WorkItems"
+
+  required_invariants:
+    - "Every inter-module handoff is represented as a WorkItem"
+    - "Next-stage WorkItems use canonical stage names only"
+    - "Payloads remain versioned"
+    - "Trace fields remain attached"
+    - "Idempotency key remains deterministic for the side effect it protects"
+
+  forbidden_behavior:
+    - "No in-process direct module chaining as a substitute for queue handoff"
+    - "No enqueue of non-versioned payloads"
+    - "No stage mutation outside canonical stage registry and parked prefix rules"
+
+replay:
+
+  replay_goal: "Re-enqueue a WorkItem safely for deterministic reprocessing."
+
+  invariants:
+    - "same routing semantics as first processing"
+    - "same idempotency semantics as first processing"
+    - "same policy-pack enforcement as first processing"
+    - "same stage-contract validation rules as first processing"
+    - "no duplicate side effects"
+
+  forbidden_behavior:
+    - "Do not create duplicate SendAttempt rows"
+    - "Do not create duplicate drafts for the same protected key"
+    - "Do not skip policy checks"
+    - "Do not bypass budget exhaustion semantics"
+
+outcome_rules:
+  completed:
+    terminal_event_type: work_item_completed
+
+  parked:
+    terminal_event_type: work_item_parked
+    valid_reason_codes:
+      - budget_exhausted
+      - no_signal
+      - policy_blocked
+      - needs_human
+    parked_stage_format: "parked:<reason_code>"
+
+  failed_contract:
+    terminal_event_type: work_item_failed_contract
+    retry_allowed: false
+
+  failed_transient:
+    terminal_event_type: work_item_failed_transient
+    retry_allowed: true
+    condition: "only while attempt budget remains"
+
+minimum_ci_gates:
+  - "Unknown stage becomes contract_error and emits structured failure event"
+  - "Parked stage does not dispatch to a normal handler"
+  - "Budget exhaustion produces deterministic parked outcome with reason"
+  - "Rerunning the same WorkItem does not duplicate protected side effects"
+  - "Handlers emit structured events at start and terminal outcome"
+  - "Structured events are redacted according to baseline policy"
+  - "Replay preserves no-duplicate guarantees"
+  - "send_enabled=false baseline is still respected"
+
+deferred_items:
+  - "Exact retry backoff numbers"
+  - "Exact numeric caps for runs, queries, accounts, contacts, enrichment attempts, drafts"
+  - "Provider vendor choice"
+  - "Deep email verification provider behavior"
+  - "Raw HTML/PDF artifact retention policy"
+  - "Approval role expansion beyond current conservative model"
+
+implementation_notes:
+  ticket_derivations:
+    - "SPEC-C1 derives from routing"
+    - "SPEC-C2 derives from attempt_budget"
+    - "SPEC-C3 derives from idempotency"
+    - "SPEC-C4 derives from structured_events"
+    - "SPEC-C5 derives from replay"
+  rule: "Ticket specs may narrow scope but must not contradict this contract."

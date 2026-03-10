@@ -1,0 +1,301 @@
+epic_e_contract_version: account_discovery_v0_1_locked
+
+policy_pack_id: safe_v0_1
+
+depends_on:
+  - spine_v0_1_locked
+  - epic_b_contract_version: spine_v0_1_locked
+
+source_documents:
+  - AI-Outbound-Support-Engine-Data-Spine-v0.1(Updated).txt
+  - Project-Roadmap.txt
+  - Aose-Guardrails-&-Governance-(policy-Pack-Safe-V0-1).txt
+  - PLACEHOLDERS.md.txt
+
+epic:
+  id: epic-e
+  name: "Thin slice 2: Account discovery with one adapter"
+  goal:
+    - "Run account discovery from stored QueryObjects through a pluggable adapter interface."
+    - "Create canonical Account records with provenance and Evidence pointers."
+    - "Guarantee deterministic dedup and replay-safe reprocessing."
+    - "Terminate runs deterministically under caps and stop rules."
+  non_goals:
+    - "No scoring or target promotion; that belongs to Epic F."
+    - "No people/contact discovery; that belongs to Epic G."
+    - "No multi-adapter ranking or orchestration beyond one configured real adapter plus test adapter."
+    - "No merge heuristics beyond locked account dedup precedence."
+    - "No sending, approval, or outbound side effects."
+
+stage_contract:
+  consumes:
+    stage: account_discovery
+    payload_versions: [1]
+    payload_shape:
+      required_fields:
+        - query_object_id
+      optional_fields:
+        - adapter_plan
+        - run_limits_override
+    preconditions:
+      - "Referenced QueryObject exists."
+      - "Referenced SellerProfile exists through QueryObject.seller_id."
+      - "WorkItem.stage must equal account_discovery."
+      - "WorkItem.trace.policy_pack_id must equal safe_v0_1."
+  produces:
+    success:
+      - stage: intent_fit_scoring
+        payload_version: 1
+        payload_shape:
+          required_fields:
+            - account_id
+      - stage: parked:no_signal
+        payload_version: 1
+      - stage: parked:budget_exhausted
+        payload_version: 1
+      - stage: parked:policy_blocked
+        payload_version: 1
+      - stage: parked:needs_human
+        payload_version: 1
+    failure:
+      - stage: parked:contract_error
+        payload_version: 1
+      - stage: parked:transient_error
+        payload_version: 1
+
+adapter_contract:
+  interface_name: AccountDiscoveryAdapter
+  method: "search_accounts(query_object, limits, context) -> AccountDiscoveryResult"
+  required_result_shape:
+    query_object_id: string
+    adapter_name: string
+    adapter_version: string
+    observed_at: iso8601_timestamp
+    candidates: list
+  candidate_shape:
+    required_fields:
+      - source_provider
+      - source_ref
+      - observed_at
+      - confidence
+      - legal_name
+      - country
+      - provenance
+      - evidence
+    optional_fields:
+      - registry_id
+      - domain
+      - legal_name_normalized
+      - raw_payload_ref
+  normalization_requirements:
+    - "All provider-derived fields must store source_provider, source_ref, observed_at, confidence."
+    - "domain must be normalized using Epic B domain_normalization."
+    - "registry_id must be stored in normalized string form exactly as emitted by the adapter helper."
+    - "country must be uppercase ISO-like code when present."
+    - "Adapter output must be normalized before canonical Account/Evidence writes."
+  implementations_locked:
+    required_test_adapter: dummy_predictable
+    required_real_adapter_count: 1
+    real_adapter_selection_placeholder: PH-EPIC-E-001
+  forbidden_behavior:
+    - "Adapter must not write directly to unrelated canonical tables."
+    - "Adapter must not bypass WorkItem idempotency or dedup checks."
+    - "Adapter must not emit prose-only evidence without structured pointer fields."
+
+canonical_writes:
+  creates_or_updates:
+    - Account
+    - AccountAlias
+    - Evidence
+    - EvidenceContent
+    - WorkItem
+  must_not_create:
+    - Scorecard
+    - Contact
+    - OutreachDraft
+    - ApprovalDecision
+    - SendAttempt
+  account_mapping:
+    account_id_precedence:
+      - "account:<COUNTRY>-<REGISTRY_ID>"
+      - "account:<normalized_domain>"
+      - "account:tmp:<sha256(country|legal_name_normalized|source_provider|source_ref)>"
+    required_minimum_for_account_creation:
+      - "(legal_name + country) OR domain"
+    required_alias_writes_when_present:
+      registry: "{ source, id }"
+      domain: "normalized domain string"
+      legal_name_normalized: "normalized legal name string"
+    initial_status: candidate
+  evidence_mapping:
+    evidence_id_formula: "evidence:<sha256(source_type|canonical_url|captured_at_iso|sha256(snippet_text_or_empty))>"
+    evidence_required_fields:
+      - source_type
+      - url
+      - captured_at
+      - snippet
+      - claim_frame
+      - provenance
+    capture_policy:
+      - "Always store url + snippet + claim_frame."
+      - "Store extracts by default for registries and first-party sites."
+      - "Pointer-only storage is allowed for noisy or low-trust sources unless promotion or draft anchoring later requires content."
+    evidence_categories_allowed:
+      - firmographic
+      - persona_fit
+      - trigger
+      - technographic
+
+provenance_and_trust:
+  provenance_required_on_account:
+    - adapter
+    - query_object_id
+    - captured_at
+  provenance_required_on_evidence:
+    - adapter
+    - query_object_id
+  source_trust_order:
+    - registry/api
+    - first-party site
+    - official profiles
+    - reputable directories
+    - general web extracts
+  merge_precedence:
+    - "Higher-trust source wins."
+    - "If equal trust, newer capture wins."
+    - "If still tied, stable lexicographic tiebreak on source_ref."
+
+dedup_rules_v0:
+  account_primary_key_logic:
+    primary: "country + registry_id"
+    fallback: "normalized_domain"
+    deferred: "name + address"
+  deterministic_behavior:
+    - "Rerunning the same discovery input must not create a second surviving Account for the same registry ID or normalized domain."
+    - "Alias insertion must be idempotent."
+    - "Evidence creation must be idempotent by evidence_id."
+  replay_guard:
+    - "If a side effect already exists under the applicable idempotency key or deterministic canonical ID, the handler becomes a no-op or deterministic overwrite."
+
+run_controls:
+  caps:
+    max_accounts_per_run: 30
+    max_external_calls_per_run: 250
+    max_runtime_seconds_per_run: 900
+    max_queries_per_run_default: 10
+    max_accounts_per_query_object:
+      source: policy_or_config
+      required: true
+      placeholder_if_undefined: PH-EPIC-E-002
+  retries_and_timeouts:
+    timeout_seconds: 20
+    retry_count_transient: 2
+    backoff_seconds: [2, 8]
+  stop_rules:
+    - code: no_signal
+      rule: "Park when a processed query object yields zero new unique accounts after adapter normalization and dedup."
+    - code: diminishing_returns
+      rule: "Stop the run when the current query adds zero new unique accounts and remaining queries are lower priority than the current query."
+    - code: budget_exhausted
+      rule: "Stop immediately when attempt budget reaches zero or any run cap is exceeded."
+    - code: max_accounts_reached
+      rule: "Stop once max_accounts_per_run or max_accounts_per_query_object is reached."
+  attempt_budget_policy:
+    decrement_on:
+      - source_call
+      - paid_provider_call
+      - model_call_if_used_for_normalization
+    do_not_decrement_on:
+      - pure_db_read
+      - idempotent_no_op_replay
+
+work_item_outcomes:
+  on_success_per_account:
+    - "Persist Account / AccountAlias / Evidence / optional EvidenceContent."
+    - "Enqueue one downstream WorkItem at stage intent_fit_scoring with payload {v:1, account_id}."
+  on_empty_result:
+    - "Park original or child WorkItem with reason code no_signal."
+  on_contract_error:
+    - "Park immediately; no retries."
+  on_transient_error:
+    - "Retry while budget remains, then park with transient_error or budget_exhausted."
+  on_policy_blocked:
+    - "Do not enqueue downstream scoring items for blocked candidates."
+
+structured_events_contract:
+  status: deferred_to_epic_c
+  requirement_during_epic_e:
+    - "Epic E code must call the Epic C structured event writer if present."
+    - "Epic E must not introduce a divergent event schema."
+
+acceptance_locked:
+  e1_adapter_interface:
+    - "A dummy adapter returns predictable normalized candidates for tests."
+    - "Tests assert interface compatibility without external network access."
+  e2_real_adapter:
+    - "Running account discovery with one real configured adapter creates Account records and Evidence pointers."
+    - "At least one discovered account carries provenance linking adapter + query_object_id + captured_at."
+  e3_dedup_rules:
+    - "Rerunning the same discovery input does not duplicate Account rows for the same registry ID or normalized domain."
+    - "Rerunning does not duplicate Evidence rows for the same evidence_id."
+  e4_stop_rules_and_caps:
+    - "A discovery run terminates deterministically under configured caps."
+    - "Budget exhaustion and no-signal outcomes park with stable reason codes."
+
+tests_required:
+  - "unit: dummy adapter predictable output"
+  - "unit: account ID mapping registry > domain > tmp"
+  - "unit: evidence ID determinism"
+  - "unit: rerun replay safety produces no duplicate accounts"
+  - "unit: alias insertion idempotency"
+  - "integration: real adapter happy path writes Account + Evidence"
+  - "integration: cap enforcement stops run deterministically"
+  - "integration: no_signal path parks correctly"
+
+errors_and_routing:
+  contract_error:
+    action: park_immediately
+    retries: 0
+  transient_error:
+    action: retry_then_park
+    retries: 2
+  budget_exhausted:
+    action: park
+    retries: 0
+  no_signal:
+    action: park
+    retries: 0
+  policy_blocked:
+    action: park
+    retries: 0
+  needs_human:
+    action: park_review_lane
+    retries: 0
+
+placeholders:
+  - id: PH-EPIC-E-001
+    name: real_account_discovery_adapter_selection
+    type: PROVIDER_ENUM
+    status: OPEN
+    blocking: "NO for interface/tests; YES for real-adapter production of external discovery data"
+    decision_needed: "Choose the first real account discovery source (for example registry-based source such as AJPES or an existing lead source) and bind it to a stable provider enum."
+    forbidden_assumptions:
+      - "Do not invent a provider not chosen by the human."
+      - "Do not claim coverage or legality characteristics not documented by the chosen source."
+    temporary_default_allowed: "Use dummy_predictable adapter only for tests and local deterministic verification."
+  - id: PH-EPIC-E-002
+    name: max_accounts_per_query_object
+    type: POLICY_VALUE
+    status: OPEN
+    blocking: "NO if local config default is used; contract still requires the existence of the cap"
+    decision_needed: "Choose the exact per-query-object account cap for discovery."
+    forbidden_assumptions:
+      - "Do not leave per-query account growth unbounded."
+    temporary_default_allowed: 10
+
+locked_defaults:
+  send_enabled: false
+  external_send_side_effects: forbidden
+  policy_pack_id: safe_v0_1
+  candidate_status_after_discovery: candidate
+  downstream_stage_after_success: intent_fit_scoring

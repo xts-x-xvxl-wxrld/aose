@@ -4,17 +4,24 @@ from sqlalchemy import pool
 from alembic import context
 import os
 
+from aose_api.models import Base
+
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
+
+
+def _sa_url() -> str:
+    """Return a SQLAlchemy-compatible URL (psycopg3 driver)."""
+    url = os.getenv("DATABASE_URL", "")
+    return url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
 def run_migrations_offline() -> None:
-    url = os.getenv("DATABASE_URL")
     context.configure(
-        url=url,
+        url=_sa_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -25,7 +32,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = os.getenv("DATABASE_URL")
+    configuration["sqlalchemy.url"] = _sa_url()
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

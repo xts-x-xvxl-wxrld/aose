@@ -1,4 +1,4 @@
-# docs/epics/epic-a/CONTRACT.yaml
+# docs/epics/epic-a/CONTRACT-A.yaml
 # Epic A contract: deterministic scaffold inputs. Prompts must not override these decisions.
 
 epic:
@@ -34,7 +34,7 @@ repo:
   docs_required:
     - docs/system/AGENT_RULES.md
     - docs/epics/epic-a/SPEC.md
-    - docs/epics/epic-a/CONTRACT.yaml
+    - docs/epics/epic-a/CONTRACT-A.yaml
     - docs/epics/epic-a/PLACEHOLDERS.md
     - docs/policy/policy-pack-safe-v0_1.md
     - docs/data-spine/DATA-SPINE-v0.1.md

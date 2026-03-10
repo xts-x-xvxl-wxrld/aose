@@ -1,0 +1,425 @@
+# docs/epics/epic-f/CONTRACT-F.yaml
+# Epic F contract: deterministic fit/intent scoring and promotion rules.
+# Prompts and implementations must not override these decisions.
+
+epic_f_contract_version: fit_intent_v0_1_locked
+
+epic:
+  id: epic-f
+  name: "Fit/Intent scoring that stays explainable"
+  version: "0.1"
+  date: "2026-03-08"
+  goal:
+    - "Produce deterministic account-level Scorecards with separate fit and intent scores."
+    - "Keep every stored scoring reason evidence-linked and auditable."
+    - "Promote candidate Accounts to target only through explicit thresholds and gate outcomes."
+  non_goals:
+    - "No people/contact scoring in Epic F."
+    - "No LLM-only scoring or model-only evidence."
+    - "No sending, approval, or contactability decisions."
+    - "No provider-specific enrichment logic."
+    - "No new canonical enums outside already locked project contracts."
+
+policy_pack_id: safe_v0_1
+
+depends_on:
+  - epic-b
+  - epic-c
+  - epic-e
+
+references:
+  canonical_stage: intent_fit_scoring
+  next_stage_on_promotion: people_search
+  parked_stage_prefix: "parked:"
+  canonical_model: Scorecard
+  upstream_records:
+    - SellerProfile
+    - QueryObject
+    - Account
+    - Evidence
+  downstream_records:
+    - Scorecard
+    - Account
+
+resolved_contract_ambiguities:
+  score_scale:
+    decision: "Use integer scores in the range 0..100 for fit and intent."
+    rationale: "Policy thresholds are defined on a 0..100 scale."
+  scorecard_scope:
+    decision: "Scorecards in Epic F are account-scoped, not contact-scoped."
+    rationale: "Epic F scores Account + Evidence and promotion mutates Account.status."
+  intent_thresholding:
+    decision: "Intent score is explanatory/prioritization output only in v0.1."
+    rationale: "The policy pack locks fit thresholds and evidence minimums, but not an intent promotion threshold."
+
+scoring_contract:
+  scoring_version: fit_intent_rules_v0_1
+
+  score_scale:
+    fit_score:
+      type: integer
+      min: 0
+      max: 100
+    intent_score:
+      type: integer
+      min: 0
+      max: 100
+    confidence:
+      type: float
+      min: 0.0
+      max: 1.0
+
+  source_trust_order:
+    - registry_api
+    - first_party_site
+    - official_profile
+    - reputable_directory
+    - general_web_extract
+
+  evidence_snapshot_hash:
+    formula: "sha256(sorted_used_evidence_ids_joined_by_|)"
+    notes:
+      - "Use only evidence_ids actually consumed by scoring logic."
+      - "Input order must be sorted lexicographically before hashing."
+
+  scorecard_id:
+    formula: "scorecard:<account_id>:<sha256(scoring_version|evidence_snapshot_hash|policy_pack_id)>"
+
+work_item:
+  consumes:
+    stage: intent_fit_scoring
+    payload_version: 1
+    payload_shape:
+      required_fields:
+        - account_id
+      optional_fields:
+        - evidence_ids
+    resolution_rules:
+      - "If payload.evidence_ids is present, score only against those evidence records."
+      - "If payload.evidence_ids is absent, resolve scoreable Evidence linked to the Account."
+      - "Seller context must resolve through Account provenance -> QueryObject -> SellerProfile, or equivalent run context already persisted upstream."
+
+  produces:
+    promoted:
+      next_stage: people_search
+      payload_version: 1
+      payload_shape:
+        required_fields:
+          - account_id
+    parked_stages:
+      - "parked:no_fit"
+      - "parked:no_signal"
+      - "parked:needs_human"
+      - "parked:budget_exhausted"
+      - "parked:contract_error"
+      - "parked:policy_blocked"
+
+required_records:
+  account:
+    required_fields:
+      - account_id
+      - status
+      - country
+    must_exist: true
+    allowed_statuses_in:
+      - candidate
+      - target
+
+  seller_context:
+    required: true
+    minimum_fields:
+      - seller_id
+      - offer.what
+      - offer.where
+      - offer.who
+
+  evidence:
+    required: true
+    minimum_count: 1
+    categories_allowed:
+      - firmographic
+      - persona_fit
+      - trigger
+      - technographic
+    categories_used_by_fit:
+      - firmographic
+      - technographic
+    categories_used_by_intent:
+      - trigger
+    categories_ignored_for_account_scoring_v0_1:
+      - persona_fit
+
+gates_in_scope:
+  hard_safety_gate:
+    outcome_values:
+      - PASS
+      - STOP
+    stop_conditions:
+      - "missing website/domain AND missing unique company identifier"
+
+  budget_gate:
+    outcome_values:
+      - PASS
+      - STOP
+    stop_conditions:
+      - "run or entity caps exceeded per safe_v0_1"
+
+  data_quality_gate:
+    outcome_values:
+      - PASS
+      - REVIEW
+      - STOP
+    stop_conditions:
+      - "missing minimum account fields: (legal_name + country) OR domain"
+    review_conditions:
+      - "conflicting firmographics unresolved"
+
+  evidence_gate:
+    outcome_values:
+      - PASS
+      - REVIEW
+    pass_condition:
+      - "at least 2 distinct evidence categories among evidence actually used for scoring"
+    review_condition:
+      - "fewer than 2 distinct evidence categories among evidence actually used for scoring"
+
+gates_out_of_scope_for_epic_f:
+  - ContactabilityGate
+  - DraftClaimEvidenceGate
+  - SendGate
+
+fit_scoring:
+  objective: "Estimate how well the Account matches the seller's target segment and offer."
+
+  positive_rules:
+    - code: industry_or_segment_exact_match
+      points: 35
+      evidence_categories:
+        - firmographic
+      exclusive_with:
+        - industry_or_segment_adjacent_match
+
+    - code: industry_or_segment_adjacent_match
+      points: 20
+      evidence_categories:
+        - firmographic
+
+    - code: offer_use_case_match
+      points: 25
+      evidence_categories:
+        - firmographic
+        - technographic
+
+    - code: geography_match
+      points: 15
+      evidence_categories:
+        - firmographic
+
+    - code: size_band_match
+      points: 10
+      evidence_categories:
+        - firmographic
+
+    - code: technographic_match
+      points: 15
+      evidence_categories:
+        - technographic
+
+  negative_rules:
+    - code: missing_website_and_registry
+      points: -15
+
+    - code: conflicting_firmographics_unresolved
+      points: -10
+
+  normalization:
+    floor: 0
+    ceiling: 100
+
+intent_scoring:
+  objective: "Estimate whether the Account shows near-term buying or change signals."
+
+  positive_rules:
+    - code: hiring_signal
+      points: 35
+      evidence_categories:
+        - trigger
+
+    - code: expansion_signal
+      points: 35
+      evidence_categories:
+        - trigger
+
+    - code: tender_or_procurement_signal
+      points: 35
+      evidence_categories:
+        - trigger
+
+    - code: new_capability_or_new_line_signal
+      points: 20
+      evidence_categories:
+        - trigger
+
+  negative_rules:
+    - code: stale_signal_over_180_days
+      points: -15
+
+    - code: contradictory_trigger_evidence
+      points: -10
+
+  normalization:
+    floor: 0
+    ceiling: 100
+
+confidence_rules:
+  fit_confidence:
+    high:
+      value: 0.85
+      requires:
+        min_distinct_sources: 2
+        min_distinct_categories: 2
+    medium:
+      value: 0.65
+      requires:
+        min_distinct_sources: 1
+        min_distinct_categories: 1
+    low:
+      value: 0.40
+    penalties:
+      conflicting_sources: 0.20
+      low_trust_only: 0.10
+    floor: 0.0
+    ceiling: 1.0
+
+  intent_confidence:
+    high:
+      value: 0.85
+      requires:
+        min_distinct_trigger_sources: 2
+    medium:
+      value: 0.65
+      requires:
+        min_distinct_trigger_sources: 1
+    low:
+      value: 0.40
+    penalties:
+      conflicting_trigger_sources: 0.20
+      stale_only_signals: 0.10
+    floor: 0.0
+    ceiling: 1.0
+
+reason_contract:
+  required_fields:
+    - code
+    - text
+    - evidence_ids
+
+  invariants:
+    - "Every stored reason must reference one or more existing evidence_ids."
+    - "Do not store prose reasons with empty evidence_ids."
+    - "If no trigger evidence exists, set intent_score=0 and intent.reasons=[]"
+    - "Model inference may assist classification but never becomes Evidence by itself."
+
+scorecard_record:
+  model_name: Scorecard
+  table_name: scorecards
+
+  shape:
+    entity_ref:
+      type: account
+      id: "<account_id>"
+    fit:
+      score: "<0..100 integer>"
+      confidence: "<0.0..1.0>"
+      reasons: "<array of reason objects>"
+    intent:
+      score: "<0..100 integer>"
+      confidence: "<0.0..1.0>"
+      reasons: "<array of reason objects>"
+    scoring_version: fit_intent_rules_v0_1
+    evidence_snapshot_hash: "<sha256>"
+    policy_pack_id: safe_v0_1
+    computed_at: "<timestamp>"
+
+promotion_rule:
+  source_status_required: candidate
+  target_status: target
+
+  promote_when_all_true:
+    - "HardSafetyGate = PASS"
+    - "BudgetGate = PASS"
+    - "DataQualityGate != STOP"
+    - "EvidenceGate = PASS"
+    - "fit_score >= 75"
+    - "deterministic dedup passes"
+
+  promotion_side_effects:
+    - "Upsert Scorecard"
+    - "Update Account.status from candidate to target"
+    - "Enqueue next WorkItem at stage people_search"
+
+  intent_effect:
+    - "Intent score does not gate promotion in v0.1."
+    - "Intent score ranks/promotes priority among already valid targets."
+
+  non_promotion_paths:
+    review_lane:
+      when_any_true:
+        - "fit_score in 65..74"
+        - "EvidenceGate = REVIEW"
+        - "DataQualityGate = REVIEW"
+        - "source conflicts require human resolution"
+      parked_stage: "parked:needs_human"
+
+    no_fit_lane:
+      when_any_true:
+        - "fit_score <= 64"
+      parked_stage: "parked:no_fit"
+
+    no_signal_lane:
+      when_any_true:
+        - "no scoreable evidence found"
+        - "intent_score = 0 AND fit_score = 0 due to absence of usable evidence"
+      parked_stage: "parked:no_signal"
+
+    blocked_lane:
+      when_any_true:
+        - "HardSafetyGate = STOP"
+      parked_stage: "parked:policy_blocked"
+
+    budget_lane:
+      when_any_true:
+        - "BudgetGate = STOP"
+      parked_stage: "parked:budget_exhausted"
+
+    contract_lane:
+      when_any_true:
+        - "required canonical records missing"
+        - "unsupported payload version"
+      parked_stage: "parked:contract_error"
+
+idempotency:
+  strategy: by_effective_scoring_input
+  effective_input_key:
+    formula: "sha256(account_id|scoring_version|evidence_snapshot_hash|policy_pack_id)"
+  rules:
+    - "Reprocessing the same effective scoring input must upsert the same Scorecard, not create a duplicate."
+    - "Promotion candidate -> target must be idempotent."
+    - "A rerun after promotion must not enqueue duplicate people_search side effects for the same idempotency context."
+
+implementation_constraints:
+  - "Rule-based only in Epic F v0.1."
+  - "No hidden weights outside this contract."
+  - "No model-generated reasons without evidence_ids."
+  - "Do not mutate canonical enums."
+  - "Do not introduce contact-level gating into account scoring."
+  - "Keep scoring handler restart-safe and replay-safe."
+
+acceptance_checks:
+  - "A valid candidate Account with scoreable Evidence produces exactly one Scorecard record on first run."
+  - "Every stored reason contains at least one evidence_id."
+  - "If no trigger evidence exists, intent_score=0 and intent.reasons=[]"
+  - "An Account with fit_score >= 75 and EvidenceGate PASS becomes status=target."
+  - "An Account with fit_score in 65..74 or EvidenceGate REVIEW does not promote and parks as needs_human."
+  - "An Account with fit_score <= 64 parks as no_fit."
+  - "Rerunning the same WorkItem does not duplicate Scorecards or downstream promotion side effects."
