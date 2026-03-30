@@ -19,7 +19,9 @@ load_model_modules()
 
 target_metadata = Base.metadata
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.alembic_database_url)
+configured_url = config.get_main_option("sqlalchemy.url")
+if not configured_url:
+    config.set_main_option("sqlalchemy.url", settings.alembic_database_url)
 
 
 def run_migrations_offline() -> None:

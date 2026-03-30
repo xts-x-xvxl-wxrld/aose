@@ -13,6 +13,10 @@ def test_create_app_bootstraps_agent_system_and_current_routes() -> None:
 
     assert "/api/v1/healthz" in paths
     assert "/api/v1/agents" in paths
+    assert "/api/v1/tenants" in paths
+    assert "/api/v1/tenants/{tenant_id}/members" in paths
+    assert "/api/v1/tenants/{tenant_id}/members/{membership_id}" in paths
+    assert "/api/v1/tenants/{tenant_id}/members/{membership_id}/transfer-ownership" in paths
 
 
 def test_openapi_smoke_exposes_current_public_routes() -> None:
@@ -26,6 +30,23 @@ def test_openapi_smoke_exposes_current_public_routes() -> None:
 
     assert "/api/v1/healthz" in schema["paths"]
     assert "/api/v1/agents" in schema["paths"]
+    assert "/api/v1/tenants" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/members" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/members/{membership_id}" in schema["paths"]
+    assert (
+        "/api/v1/tenants/{tenant_id}/members/{membership_id}/transfer-ownership"
+        in schema["paths"]
+    )
     assert "get" in schema["paths"]["/api/v1/healthz"]
     assert "get" in schema["paths"]["/api/v1/agents"]
-
+    assert "post" in schema["paths"]["/api/v1/tenants"]
+    assert "get" in schema["paths"]["/api/v1/tenants/{tenant_id}/members"]
+    assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/members"]
+    assert "patch" in schema["paths"]["/api/v1/tenants/{tenant_id}/members/{membership_id}"]
+    assert "delete" in schema["paths"]["/api/v1/tenants/{tenant_id}/members/{membership_id}"]
+    assert (
+        "post"
+        in schema["paths"][
+            "/api/v1/tenants/{tenant_id}/members/{membership_id}/transfer-ownership"
+        ]
+    )

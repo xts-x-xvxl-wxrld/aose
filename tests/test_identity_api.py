@@ -1,10 +1,17 @@
 from fastapi.testclient import TestClient
 
+from app.db.session import get_optional_db_session
 from app.main import create_app
 
 
 def test_me_endpoint_uses_fake_auth_request_context() -> None:
-    client = TestClient(create_app())
+    app = create_app()
+
+    async def override_get_optional_db_session():
+        yield None
+
+    app.dependency_overrides[get_optional_db_session] = override_get_optional_db_session
+    client = TestClient(app)
 
     response = client.get("/api/v1/me")
 
@@ -17,7 +24,13 @@ def test_me_endpoint_uses_fake_auth_request_context() -> None:
 
 
 def test_tenants_endpoint_returns_fake_membership() -> None:
-    client = TestClient(create_app())
+    app = create_app()
+
+    async def override_get_optional_db_session():
+        yield None
+
+    app.dependency_overrides[get_optional_db_session] = override_get_optional_db_session
+    client = TestClient(app)
 
     response = client.get("/api/v1/tenants")
 

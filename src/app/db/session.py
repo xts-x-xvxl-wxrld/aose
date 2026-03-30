@@ -7,7 +7,12 @@ from typing import Any
 from app.config import get_settings
 
 try:
-    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import (
+        AsyncEngine,
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
 except ModuleNotFoundError:
     AsyncEngine = Any  # type: ignore[misc,assignment]
     AsyncSession = Any  # type: ignore[misc,assignment]
@@ -45,5 +50,16 @@ def get_session_factory() -> Any:
 
 async def get_db_session() -> AsyncIterator[AsyncSession]:
     session_factory = get_session_factory()
+    async with session_factory() as session:
+        yield session
+
+
+async def get_optional_db_session() -> AsyncIterator[AsyncSession | None]:
+    try:
+        session_factory = get_session_factory()
+    except (ModuleNotFoundError, RuntimeError):
+        yield None
+        return
+
     async with session_factory() as session:
         yield session

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +17,11 @@ class TenantRepository:
         self._session.add(tenant)
         await self._session.flush()
         return tenant
+
+    async def get_by_id(self, *, tenant_id: UUID) -> Tenant | None:
+        statement = select(Tenant).where(Tenant.id == tenant_id)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
 
     async def get_by_slug(self, *, slug: str) -> Tenant | None:
         statement = select(Tenant).where(Tenant.slug == slug)

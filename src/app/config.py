@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     fake_auth_tenant_id: str = "tenant_dev"
     fake_auth_tenant_name: str = "Local Dev Tenant"
     fake_auth_membership_role: str = "owner"
+    tenant_self_serve_creation_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

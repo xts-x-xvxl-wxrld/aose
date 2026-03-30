@@ -7,7 +7,7 @@ from app.agents.registry import AgentSystem
 from app.auth.fake_adapter import FakeAuthAdapter
 from app.auth.types import AuthIdentity, RequestContext, ResolvedMembership, ResolvedUser
 from app.config import Settings, get_settings
-from app.db.session import AsyncSession, get_db_session
+from app.db.session import AsyncSession, get_db_session, get_optional_db_session
 
 
 def get_agent_system(request: Request) -> AgentSystem:
@@ -22,7 +22,9 @@ def get_settings_dependency() -> Settings:
     return get_settings()
 
 
-def get_auth_adapter(settings: Annotated[Settings, Depends(get_settings_dependency)]) -> FakeAuthAdapter:
+def get_auth_adapter(
+    settings: Annotated[Settings, Depends(get_settings_dependency)],
+) -> FakeAuthAdapter:
     return FakeAuthAdapter(settings)
 
 
@@ -83,7 +85,7 @@ def get_current_membership(
     request: Request,
     memberships: Annotated[list[ResolvedMembership], Depends(get_current_memberships)],
 ) -> ResolvedMembership | None:
-    requested_tenant_id = request.path_params.get("tenant_id") or request.headers.get("X-Tenant-ID")
+    requested_tenant_id = request.path_params.get("tenant_id")
     if requested_tenant_id is None:
         return None
 
@@ -124,7 +126,10 @@ def require_tenant_request_context(
 AgentSystemDep = Annotated[AgentSystem, Depends(get_agent_system)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dependency)]
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
+OptionalDbSessionDep = Annotated[AsyncSession | None, Depends(get_optional_db_session)]
 CurrentUserDep = Annotated[ResolvedUser, Depends(get_current_user)]
 CurrentMembershipsDep = Annotated[list[ResolvedMembership], Depends(get_current_memberships)]
 RequestContextDep = Annotated[RequestContext, Depends(get_request_context)]
 TenantRequestContextDep = Annotated[RequestContext, Depends(require_tenant_request_context)]
+AuthIdentityDep = Annotated[AuthIdentity, Depends(get_auth_identity)]
+RequestIdDep = Annotated[str, Depends(get_request_id)]
