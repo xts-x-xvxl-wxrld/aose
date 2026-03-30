@@ -27,6 +27,14 @@ class TimestampMixin:
     )
 
 
+class CreatedAtMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 def status_check(column_name: str, allowed_values: Iterable[str], *, name: str) -> CheckConstraint:
     allowed = ", ".join(f"'{value}'" for value in allowed_values)
     return CheckConstraint(f"{column_name} IN ({allowed})", name=name)

@@ -13,6 +13,7 @@ from app.models.common import TimestampMixin, UUIDPrimaryKeyMixin, status_check
 
 
 if TYPE_CHECKING:
+    from app.models.conversation_thread import ConversationThread
     from app.models.icp_profile import ICPProfile
     from app.models.tenant import Tenant
     from app.models.user import User
@@ -62,3 +63,4 @@ class SellerProfile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         foreign_keys=[updated_by_user_id],
     )
     icp_profiles: Mapped[list["ICPProfile"]] = relationship(back_populates="seller_profile")
+    conversation_threads: Mapped[list["ConversationThread"]] = relationship(back_populates="seller_profile")
