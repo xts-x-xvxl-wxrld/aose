@@ -10,23 +10,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.common import CreatedAtMixin, UUIDPrimaryKeyMixin, status_check
-
+from app.orchestration.contracts import RUN_EVENT_NAMES
 
 if TYPE_CHECKING:
     from app.models.tenant import Tenant
     from app.models.workflow_run import WorkflowRun
-
-
-RUN_EVENT_NAMES = (
-    "run.started",
-    "agent.handoff",
-    "agent.completed",
-    "tool.started",
-    "tool.completed",
-    "run.awaiting_review",
-    "run.completed",
-    "run.failed",
-)
 
 
 class RunEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -50,5 +38,5 @@ class RunEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     event_name: Mapped[str] = mapped_column(String(64), nullable=False)
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
-    tenant: Mapped["Tenant"] = relationship(back_populates="run_events")
-    workflow_run: Mapped["WorkflowRun"] = relationship(back_populates="run_events")
+    tenant: Mapped[Tenant] = relationship(back_populates="run_events")
+    workflow_run: Mapped[WorkflowRun] = relationship(back_populates="run_events")

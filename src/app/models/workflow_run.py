@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.common import TimestampMixin, UUIDPrimaryKeyMixin, status_check
-
+from app.orchestration.contracts import WORKFLOW_RUN_STATUSES, WORKFLOW_TYPES
 
 if TYPE_CHECKING:
     from app.models.account import Account
@@ -24,16 +24,6 @@ if TYPE_CHECKING:
     from app.models.source_evidence import SourceEvidence
     from app.models.tenant import Tenant
     from app.models.user import User
-
-
-WORKFLOW_TYPES = (
-    "seller_profile_setup",
-    "icp_profile_setup",
-    "account_search",
-    "account_research",
-    "contact_search",
-)
-WORKFLOW_RUN_STATUSES = ("queued", "running", "awaiting_review", "succeeded", "failed", "cancelled")
 
 
 class WorkflowRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -77,17 +67,21 @@ class WorkflowRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
-    tenant: Mapped["Tenant"] = relationship(back_populates="workflow_runs")
-    thread: Mapped["ConversationThread | None"] = relationship(
+    tenant: Mapped[Tenant] = relationship(back_populates="workflow_runs")
+    thread: Mapped[ConversationThread | None] = relationship(
         back_populates="workflow_runs",
         foreign_keys=[thread_id],
         overlaps="current_run",
     )
-    created_by_user: Mapped["User"] = relationship(back_populates="created_workflow_runs")
-    messages: Mapped[list["ConversationMessage"]] = relationship(back_populates="run")
-    run_events: Mapped[list["RunEvent"]] = relationship(back_populates="workflow_run")
-    accounts: Mapped[list["Account"]] = relationship(back_populates="source_workflow_run")
-    research_snapshots: Mapped[list["AccountResearchSnapshot"]] = relationship(back_populates="workflow_run")
-    source_evidence: Mapped[list["SourceEvidence"]] = relationship(back_populates="workflow_run")
-    artifacts: Mapped[list["Artifact"]] = relationship(back_populates="workflow_run")
-    approval_decisions: Mapped[list["ApprovalDecision"]] = relationship(back_populates="workflow_run")
+    created_by_user: Mapped[User] = relationship(back_populates="created_workflow_runs")
+    messages: Mapped[list[ConversationMessage]] = relationship(back_populates="run")
+    run_events: Mapped[list[RunEvent]] = relationship(back_populates="workflow_run")
+    accounts: Mapped[list[Account]] = relationship(back_populates="source_workflow_run")
+    research_snapshots: Mapped[list[AccountResearchSnapshot]] = relationship(
+        back_populates="workflow_run"
+    )
+    source_evidence: Mapped[list[SourceEvidence]] = relationship(back_populates="workflow_run")
+    artifacts: Mapped[list[Artifact]] = relationship(back_populates="workflow_run")
+    approval_decisions: Mapped[list[ApprovalDecision]] = relationship(
+        back_populates="workflow_run"
+    )
