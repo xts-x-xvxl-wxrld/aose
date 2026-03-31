@@ -1,3 +1,29 @@
+from app.workflows.account_research import (
+    AccountResearchPlan,
+    AccountResearchRecord,
+    AccountResearchToolset,
+    AccountResearchWorkflow,
+    AccountResearchWorkflowInput,
+    ResearchEvidenceRecord,
+    ResearchTopicSummary,
+)
+from app.workflows.account_search import (
+    AccountCandidateRecord,
+    AccountSearchAttemptRecord,
+    AccountSearchPlan,
+    AccountSearchSelection,
+    AccountSearchWorkflow,
+    AccountSearchWorkflowInput,
+    CandidateEvidenceRecord,
+)
+from app.workflows.contact_search import (
+    ContactCandidateEvidenceRecord,
+    ContactCandidateRecord,
+    ContactSearchRecord,
+    ContactSearchToolset,
+    ContactSearchWorkflow,
+    ContactSearchWorkflowInput,
+)
 from app.workflows.contracts import (
     AccountResearchRunResult,
     AccountResearchRunResultOutcome,
@@ -9,11 +35,31 @@ from app.workflows.contracts import (
 )
 
 __all__ = [
+    "AccountResearchPlan",
+    "AccountResearchRecord",
     "AccountResearchRunResult",
     "AccountResearchRunResultOutcome",
+    "AccountResearchToolset",
+    "AccountResearchWorkflow",
+    "AccountResearchWorkflowInput",
+    "AccountCandidateRecord",
+    "AccountSearchAttemptRecord",
+    "AccountSearchPlan",
     "AccountSearchRunResult",
     "AccountSearchRunResultOutcome",
+    "AccountSearchSelection",
+    "AccountSearchWorkflow",
+    "AccountSearchWorkflowInput",
+    "CandidateEvidenceRecord",
+    "ContactCandidateEvidenceRecord",
+    "ContactCandidateRecord",
     "ContactMissingDataFlag",
+    "ContactSearchRecord",
     "ContactSearchRunResult",
     "ContactSearchRunResultOutcome",
+    "ContactSearchToolset",
+    "ContactSearchWorkflow",
+    "ContactSearchWorkflowInput",
+    "ResearchEvidenceRecord",
+    "ResearchTopicSummary",
 ]

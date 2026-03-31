@@ -17,6 +17,13 @@ def test_create_app_bootstraps_agent_system_and_current_routes() -> None:
     assert "/api/v1/tenants/{tenant_id}/members" in paths
     assert "/api/v1/tenants/{tenant_id}/members/{membership_id}" in paths
     assert "/api/v1/tenants/{tenant_id}/members/{membership_id}/transfer-ownership" in paths
+    assert "/api/v1/tenants/{tenant_id}/seller-profiles" in paths
+    assert "/api/v1/tenants/{tenant_id}/seller-profiles/{seller_profile_id}" in paths
+    assert "/api/v1/tenants/{tenant_id}/icp-profiles" in paths
+    assert "/api/v1/tenants/{tenant_id}/icp-profiles/{icp_profile_id}" in paths
+    assert "/api/v1/tenants/{tenant_id}/workflow-runs/{run_id}/evidence" in paths
+    assert "/api/v1/tenants/{tenant_id}/artifacts/{artifact_id}" in paths
+    assert "/api/v1/tenants/{tenant_id}/workflow-runs/{run_id}/approvals" in paths
 
 
 def test_openapi_smoke_exposes_current_public_routes() -> None:
@@ -37,6 +44,13 @@ def test_openapi_smoke_exposes_current_public_routes() -> None:
         "/api/v1/tenants/{tenant_id}/members/{membership_id}/transfer-ownership"
         in schema["paths"]
     )
+    assert "/api/v1/tenants/{tenant_id}/seller-profiles" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/seller-profiles/{seller_profile_id}" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/icp-profiles" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/icp-profiles/{icp_profile_id}" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/workflow-runs/{run_id}/evidence" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/artifacts/{artifact_id}" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/workflow-runs/{run_id}/approvals" in schema["paths"]
     assert "get" in schema["paths"]["/api/v1/healthz"]
     assert "get" in schema["paths"]["/api/v1/agents"]
     assert "post" in schema["paths"]["/api/v1/tenants"]
@@ -44,6 +58,13 @@ def test_openapi_smoke_exposes_current_public_routes() -> None:
     assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/members"]
     assert "patch" in schema["paths"]["/api/v1/tenants/{tenant_id}/members/{membership_id}"]
     assert "delete" in schema["paths"]["/api/v1/tenants/{tenant_id}/members/{membership_id}"]
+    assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/seller-profiles"]
+    assert "patch" in schema["paths"]["/api/v1/tenants/{tenant_id}/seller-profiles/{seller_profile_id}"]
+    assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/icp-profiles"]
+    assert "patch" in schema["paths"]["/api/v1/tenants/{tenant_id}/icp-profiles/{icp_profile_id}"]
+    assert "get" in schema["paths"]["/api/v1/tenants/{tenant_id}/workflow-runs/{run_id}/evidence"]
+    assert "get" in schema["paths"]["/api/v1/tenants/{tenant_id}/artifacts/{artifact_id}"]
+    assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/workflow-runs/{run_id}/approvals"]
     assert (
         "post"
         in schema["paths"][

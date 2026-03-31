@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -186,6 +186,7 @@ class WorkflowRunService:
         run_id: UUID,
         error_code: str,
         failure_summary: str,
+        normalized_result_json: dict[str, Any] | None = None,
         status_detail: str | None = None,
     ) -> WorkflowRun:
         run, _event = await self._transition_run(
@@ -193,6 +194,7 @@ class WorkflowRunService:
             run_id=run_id,
             next_status=WorkflowRunStatus.FAILED,
             status_detail=status_detail,
+            normalized_result_json=normalized_result_json,
             error_code=error_code,
             event_name=RunEventName.RUN_FAILED,
             event_payload_builder=lambda _current_run: {
@@ -347,7 +349,7 @@ class WorkflowRunService:
                 ),
             )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         changes: dict[str, Any] = {"status": next_status.value}
         if next_status is WorkflowRunStatus.RUNNING and run.started_at is None:
             changes["started_at"] = now
