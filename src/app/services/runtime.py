@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
@@ -31,6 +33,7 @@ class WorkflowExecutor(Protocol):
 
 
 WorkflowExecutionHandler = Callable[[WorkflowExecutionRequest], Awaitable[None]]
+logger = logging.getLogger(__name__)
 
 
 class InProcessWorkflowExecutor:
@@ -39,6 +42,7 @@ class InProcessWorkflowExecutor:
         handlers: Mapping[WorkflowType, WorkflowExecutionHandler] | None = None,
     ) -> None:
         self._handlers = dict(handlers or {})
+        self._tasks: set[asyncio.Task[None]] = set()
 
     def register_handler(
         self,
@@ -53,7 +57,21 @@ class InProcessWorkflowExecutor:
             raise LookupError(
                 f"No workflow handler is registered for {request.workflow_type.value}."
             )
-        await handler(request)
+        task = asyncio.create_task(handler(request))
+        self._tasks.add(task)
+        task.add_done_callback(self._handle_task_done)
+
+    async def wait_for_all(self) -> None:
+        while self._tasks:
+            tasks = tuple(self._tasks)
+            await asyncio.gather(*tasks)
+
+    def _handle_task_done(self, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
+        try:
+            task.result()
+        except Exception:
+            logger.exception("Background workflow execution failed.")
 
 
 async def dispatch_workflow_run(

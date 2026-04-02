@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -64,6 +65,7 @@ class ConversationThread(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
     )
     summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     tenant: Mapped[Tenant] = relationship(back_populates="conversation_threads")
     created_by_user: Mapped[User] = relationship(

@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import RunEvent
+from app.models import RunEvent, WorkflowRun
 
 
 class RunEventRepository:
@@ -46,5 +46,26 @@ class RunEventRepository:
             )
             .order_by(RunEvent.created_at.asc(), RunEvent.id.asc())
         )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def list_recent_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        thread_id: UUID | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Sequence[RunEvent]:
+        statement = (
+            select(RunEvent)
+            .join(WorkflowRun, WorkflowRun.id == RunEvent.run_id)
+            .where(RunEvent.tenant_id == tenant_id, WorkflowRun.tenant_id == tenant_id)
+            .order_by(RunEvent.created_at.desc(), RunEvent.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        if thread_id is not None:
+            statement = statement.where(WorkflowRun.thread_id == thread_id)
         result = await self._session.execute(statement)
         return list(result.scalars().all())

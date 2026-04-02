@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -14,6 +14,7 @@ from app.orchestration.contracts import (
     WorkflowType,
     is_allowed_workflow_run_transition,
 )
+from app.repositories.conversation_message_repository import ConversationMessageRepository
 from app.repositories.run_event_repository import RunEventRepository
 from app.repositories.workflow_run_repository import WorkflowRunRepository
 from app.services.errors import ServiceError
@@ -35,6 +36,7 @@ class WorkflowRunService:
         self._session = session
         self._runs = WorkflowRunRepository(session)
         self._events = RunEventRepository(session)
+        self._messages = ConversationMessageRepository(session)
         self._executor = executor
 
     async def create_queued_run(
@@ -126,6 +128,16 @@ class WorkflowRunService:
                     str(current_run.thread_id) if current_run.thread_id is not None else None
                 ),
             },
+            thread_message_builder=lambda current_run: [
+                _thread_message(
+                    role="system",
+                    message_type="workflow_status",
+                    content_text=_workflow_status_message_text(
+                        workflow_type=current_run.workflow_type,
+                        status=WorkflowRunStatus.RUNNING,
+                    ),
+                )
+            ],
         )
         return run
 
@@ -151,6 +163,25 @@ class WorkflowRunService:
                 "workflow_run_id": str(current_run.id),
                 "artifact_id": str(artifact_id) if artifact_id is not None else None,
             },
+            thread_message_builder=lambda current_run: [
+                _thread_message(
+                    role="system",
+                    message_type="workflow_status",
+                    content_text=_workflow_status_message_text(
+                        workflow_type=current_run.workflow_type,
+                        status=WorkflowRunStatus.AWAITING_REVIEW,
+                    ),
+                ),
+                _thread_message(
+                    role="assistant",
+                    message_type="assistant_reply",
+                    content_text=_workflow_terminal_assistant_summary(
+                        workflow_type=current_run.workflow_type,
+                        status=WorkflowRunStatus.AWAITING_REVIEW,
+                        summary_text=review_reason,
+                    ),
+                ),
+            ],
         )
         return run
 
@@ -176,6 +207,25 @@ class WorkflowRunService:
                 "result_summary": result_summary,
                 "canonical_output_ids": canonical_output_ids or {},
             },
+            thread_message_builder=lambda current_run: [
+                _thread_message(
+                    role="system",
+                    message_type="workflow_status",
+                    content_text=_workflow_status_message_text(
+                        workflow_type=current_run.workflow_type,
+                        status=WorkflowRunStatus.SUCCEEDED,
+                    ),
+                ),
+                _thread_message(
+                    role="assistant",
+                    message_type="assistant_reply",
+                    content_text=_workflow_terminal_assistant_summary(
+                        workflow_type=current_run.workflow_type,
+                        status=WorkflowRunStatus.SUCCEEDED,
+                        summary_text=result_summary,
+                    ),
+                ),
+            ],
         )
         return run
 
@@ -201,6 +251,25 @@ class WorkflowRunService:
                 "error_code": error_code,
                 "failure_summary": failure_summary,
             },
+            thread_message_builder=lambda current_run: [
+                _thread_message(
+                    role="system",
+                    message_type="workflow_status",
+                    content_text=_workflow_status_message_text(
+                        workflow_type=current_run.workflow_type,
+                        status=WorkflowRunStatus.FAILED,
+                    ),
+                ),
+                _thread_message(
+                    role="assistant",
+                    message_type="assistant_reply",
+                    content_text=_workflow_terminal_assistant_summary(
+                        workflow_type=current_run.workflow_type,
+                        status=WorkflowRunStatus.FAILED,
+                        summary_text=failure_summary,
+                    ),
+                ),
+            ],
         )
         return run
 
@@ -332,6 +401,7 @@ class WorkflowRunService:
         error_code: str | None | object = _UNSET,
         event_name: RunEventName | None = None,
         event_payload_builder: Callable[[WorkflowRun], dict[str, Any]] | None = None,
+        thread_message_builder: Callable[[WorkflowRun], list[dict[str, str]]] | None = None,
     ) -> tuple[WorkflowRun, RunEvent | None]:
         run = await self._runs.get_for_tenant(tenant_id=tenant_id, run_id=run_id)
         if run is None:
@@ -382,9 +452,78 @@ class WorkflowRunService:
                 event_name=event_name.value,
                 payload_json=payload,
             )
+        if thread_message_builder is not None and updated_run.thread_id is not None:
+            thread_messages = await self._messages.list_for_thread(
+                tenant_id=tenant_id,
+                thread_id=updated_run.thread_id,
+            )
+            message_time = _next_message_time(
+                thread_messages[-1].created_at if thread_messages else None
+            )
+            for index, message in enumerate(thread_message_builder(updated_run)):
+                await self._messages.create(
+                    tenant_id=tenant_id,
+                    thread_id=updated_run.thread_id,
+                    run_id=updated_run.id,
+                    role=message["role"],
+                    message_type=message["message_type"],
+                    content_text=message["content_text"],
+                    created_at=message_time + timedelta(microseconds=index),
+                )
 
         await self._session.commit()
         await self._session.refresh(updated_run)
         if event is not None:
             await self._session.refresh(event)
         return updated_run, event
+
+
+def _thread_message(*, role: str, message_type: str, content_text: str) -> dict[str, str]:
+    return {
+        "role": role,
+        "message_type": message_type,
+        "content_text": content_text,
+    }
+
+
+def _workflow_status_message_text(*, workflow_type: str, status: WorkflowRunStatus) -> str:
+    workflow_label = workflow_type.replace("_", " ")
+    if status is WorkflowRunStatus.RUNNING:
+        return f"I started the {workflow_label} workflow for this thread."
+    if status is WorkflowRunStatus.AWAITING_REVIEW:
+        return f"The {workflow_label} workflow is waiting for review."
+    if status is WorkflowRunStatus.SUCCEEDED:
+        return f"The {workflow_label} workflow finished successfully."
+    if status is WorkflowRunStatus.FAILED:
+        return f"The {workflow_label} workflow finished with a failure."
+    return f"The {workflow_label} workflow is {status.value}."
+
+
+def _workflow_terminal_assistant_summary(
+    *,
+    workflow_type: str,
+    status: WorkflowRunStatus,
+    summary_text: str,
+) -> str:
+    workflow_label = workflow_type.replace("_", " ")
+    normalized_summary = summary_text.strip()
+    if status is WorkflowRunStatus.AWAITING_REVIEW:
+        return (
+            f"I finished the {workflow_label} workflow and it now needs review. "
+            f"{normalized_summary}"
+        )
+    if status is WorkflowRunStatus.SUCCEEDED:
+        return f"I finished the {workflow_label} workflow. {normalized_summary}"
+    return f"I hit a problem while running the {workflow_label} workflow. {normalized_summary}"
+
+
+def _next_message_time(reference: datetime | None) -> datetime:
+    candidate = datetime.now(timezone.utc)
+    if reference is None:
+        return candidate
+    reference_time = reference
+    if reference_time.tzinfo is None:
+        reference_time = reference_time.replace(tzinfo=timezone.utc)
+    else:
+        reference_time = reference_time.astimezone(timezone.utc)
+    return max(candidate, reference_time + timedelta(microseconds=1))

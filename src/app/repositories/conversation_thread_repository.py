@@ -23,6 +23,7 @@ class ConversationThreadRepository:
         active_workflow: str | None = None,
         current_run_id: UUID | None = None,
         summary_text: str | None = None,
+        context_json: dict[str, Any] | None = None,
     ) -> ConversationThread:
         thread = ConversationThread(
             tenant_id=tenant_id,
@@ -32,6 +33,7 @@ class ConversationThreadRepository:
             status=status,
             current_run_id=current_run_id,
             summary_text=summary_text,
+            context_json=context_json,
         )
         self._session.add(thread)
         await self._session.flush()

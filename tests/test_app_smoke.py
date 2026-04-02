@@ -8,6 +8,7 @@ def test_create_app_bootstraps_agent_system_and_current_routes() -> None:
 
     assert app.title == "Agentic OSE"
     assert app.state.agent_system.orchestrator.name == "orchestrator_agent"
+    assert app.state.workflow_executor is not None
 
     paths = {route.path for route in app.routes}
 
@@ -17,6 +18,9 @@ def test_create_app_bootstraps_agent_system_and_current_routes() -> None:
     assert "/api/v1/tenants/{tenant_id}/members" in paths
     assert "/api/v1/tenants/{tenant_id}/members/{membership_id}" in paths
     assert "/api/v1/tenants/{tenant_id}/members/{membership_id}/transfer-ownership" in paths
+    assert "/api/v1/tenants/{tenant_id}/chat/stream" in paths
+    assert "/api/v1/tenants/{tenant_id}/chat/threads/{thread_id}" in paths
+    assert "/api/v1/tenants/{tenant_id}/chat/threads/{thread_id}/messages" in paths
     assert "/api/v1/tenants/{tenant_id}/seller-profiles" in paths
     assert "/api/v1/tenants/{tenant_id}/seller-profiles/{seller_profile_id}" in paths
     assert "/api/v1/tenants/{tenant_id}/icp-profiles" in paths
@@ -40,6 +44,9 @@ def test_openapi_smoke_exposes_current_public_routes() -> None:
     assert "/api/v1/tenants" in schema["paths"]
     assert "/api/v1/tenants/{tenant_id}/members" in schema["paths"]
     assert "/api/v1/tenants/{tenant_id}/members/{membership_id}" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/chat/stream" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/chat/threads/{thread_id}" in schema["paths"]
+    assert "/api/v1/tenants/{tenant_id}/chat/threads/{thread_id}/messages" in schema["paths"]
     assert (
         "/api/v1/tenants/{tenant_id}/members/{membership_id}/transfer-ownership"
         in schema["paths"]
@@ -58,6 +65,9 @@ def test_openapi_smoke_exposes_current_public_routes() -> None:
     assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/members"]
     assert "patch" in schema["paths"]["/api/v1/tenants/{tenant_id}/members/{membership_id}"]
     assert "delete" in schema["paths"]["/api/v1/tenants/{tenant_id}/members/{membership_id}"]
+    assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/chat/stream"]
+    assert "get" in schema["paths"]["/api/v1/tenants/{tenant_id}/chat/threads/{thread_id}"]
+    assert "get" in schema["paths"]["/api/v1/tenants/{tenant_id}/chat/threads/{thread_id}/messages"]
     assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/seller-profiles"]
     assert "patch" in schema["paths"]["/api/v1/tenants/{tenant_id}/seller-profiles/{seller_profile_id}"]
     assert "post" in schema["paths"]["/api/v1/tenants/{tenant_id}/icp-profiles"]

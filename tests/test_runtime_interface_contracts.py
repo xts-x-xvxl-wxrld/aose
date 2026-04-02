@@ -100,6 +100,7 @@ async def test_in_process_workflow_executor_dispatches_registered_handler() -> N
     )
 
     dispatched_request = await dispatch_workflow_run(executor, request)
+    await executor.wait_for_all()
 
     assert dispatched_request == request
     assert received == [request]

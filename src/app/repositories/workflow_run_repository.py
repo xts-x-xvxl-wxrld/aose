@@ -88,3 +88,26 @@ class WorkflowRunRepository:
             setattr(workflow_run, field_name, field_value)
         await self._session.flush()
         return workflow_run
+
+    async def list_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        thread_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[WorkflowRun]:
+        statement = (
+            select(WorkflowRun)
+            .where(WorkflowRun.tenant_id == tenant_id)
+            .order_by(WorkflowRun.updated_at.desc(), WorkflowRun.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        if thread_id is not None:
+            statement = statement.where(WorkflowRun.thread_id == thread_id)
+        if status is not None:
+            statement = statement.where(WorkflowRun.status == status)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())

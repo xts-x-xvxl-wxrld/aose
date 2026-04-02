@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.db.base import Base
 from app.models import load_model_modules
 from app.orchestration.contracts import WorkflowType
+from app.repositories.conversation_message_repository import ConversationMessageRepository
 from app.repositories.conversation_thread_repository import ConversationThreadRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
@@ -91,6 +92,7 @@ async def test_workflow_run_service_creates_dispatches_and_lists_events(
         correlation_id="corr-123",
     )
     dispatched_request = await service.dispatch_queued_run(run=run, request_id="req_789")
+    await executor.wait_for_all()
     first_event = await service.emit_event(
         tenant_id=tenant.id,
         run_id=run.id,
@@ -120,10 +122,16 @@ async def test_workflow_run_service_lifecycle_helpers_update_status_and_emit_too
 ) -> None:
     user_repository = UserRepository(db_session)
     tenant_repository = TenantRepository(db_session)
+    thread_repository = ConversationThreadRepository(db_session)
     service = WorkflowRunService(db_session)
 
     user = await user_repository.create(external_auth_subject="subject-workflow-lifecycle")
     tenant = await tenant_repository.create(name="Tenant One", slug="tenant-one")
+    thread = await thread_repository.create(
+        tenant_id=tenant.id,
+        created_by_user_id=user.id,
+        active_workflow="account_search",
+    )
     await db_session.commit()
 
     run = await service.create_queued_run(
@@ -131,6 +139,7 @@ async def test_workflow_run_service_lifecycle_helpers_update_status_and_emit_too
         created_by_user_id=user.id,
         workflow_type=WorkflowType.ACCOUNT_SEARCH,
         requested_payload_json={"objective": "Find fintech accounts"},
+        thread_id=thread.id,
     )
     running_run = await service.mark_running(
         tenant_id=tenant.id,
@@ -173,3 +182,124 @@ async def test_workflow_run_service_lifecycle_helpers_update_status_and_emit_too
     ]
     assert events[1].payload_json["tool_name"] == "web_search"
     assert events[2].payload_json["produced_evidence_results"] is True
+
+
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires TEST_DATABASE_URL")
+@pytest.mark.asyncio
+async def test_workflow_run_service_persists_thread_messages_for_terminal_states(
+    db_session: AsyncSession,
+) -> None:
+    user_repository = UserRepository(db_session)
+    tenant_repository = TenantRepository(db_session)
+    thread_repository = ConversationThreadRepository(db_session)
+    service = WorkflowRunService(db_session)
+
+    user = await user_repository.create(external_auth_subject="subject-workflow-thread-messages")
+    tenant = await tenant_repository.create(name="Tenant One", slug="tenant-one")
+    thread = await thread_repository.create(
+        tenant_id=tenant.id,
+        created_by_user_id=user.id,
+        active_workflow="account_search",
+    )
+    await db_session.commit()
+
+    succeeded_run = await service.create_queued_run(
+        tenant_id=tenant.id,
+        created_by_user_id=user.id,
+        workflow_type=WorkflowType.ACCOUNT_SEARCH,
+        requested_payload_json={"objective": "Find accounts"},
+        thread_id=thread.id,
+    )
+    await service.mark_running(
+        tenant_id=tenant.id,
+        run_id=succeeded_run.id,
+        status_detail="Started account search.",
+    )
+    await service.mark_succeeded(
+        tenant_id=tenant.id,
+        run_id=succeeded_run.id,
+        result_summary="Completed account search.",
+    )
+
+    failed_run = await service.create_queued_run(
+        tenant_id=tenant.id,
+        created_by_user_id=user.id,
+        workflow_type=WorkflowType.ACCOUNT_SEARCH,
+        requested_payload_json={"objective": "Retry accounts"},
+        thread_id=thread.id,
+    )
+    await service.mark_running(
+        tenant_id=tenant.id,
+        run_id=failed_run.id,
+        status_detail="Started second account search.",
+    )
+    await service.mark_failed(
+        tenant_id=tenant.id,
+        run_id=failed_run.id,
+        error_code="workflow_failed",
+        failure_summary="Search provider timed out.",
+    )
+
+    review_run = await service.create_queued_run(
+        tenant_id=tenant.id,
+        created_by_user_id=user.id,
+        workflow_type=WorkflowType.ACCOUNT_SEARCH,
+        requested_payload_json={"objective": "Review accounts"},
+        thread_id=thread.id,
+    )
+    await service.mark_running(
+        tenant_id=tenant.id,
+        run_id=review_run.id,
+        status_detail="Started review-bound account search.",
+    )
+    await service.mark_awaiting_review(
+        tenant_id=tenant.id,
+        run_id=review_run.id,
+        review_reason="Need approval before using these accounts.",
+    )
+
+    run_messages = [
+        message
+        for message in await ConversationMessageRepository(db_session).list_for_thread(
+            tenant_id=tenant.id,
+            thread_id=thread.id,
+        )
+        if message.run_id in {succeeded_run.id, failed_run.id, review_run.id}
+    ]
+
+    assert any(
+        message.message_type == "workflow_status"
+        and message.run_id == succeeded_run.id
+        and "finished successfully" in message.content_text.lower()
+        for message in run_messages
+    )
+    assert any(
+        message.message_type == "assistant_reply"
+        and message.run_id == succeeded_run.id
+        and "completed account search" in message.content_text.lower()
+        for message in run_messages
+    )
+    assert any(
+        message.message_type == "workflow_status"
+        and message.run_id == failed_run.id
+        and "finished with a failure" in message.content_text.lower()
+        for message in run_messages
+    )
+    assert any(
+        message.message_type == "assistant_reply"
+        and message.run_id == failed_run.id
+        and "search provider timed out" in message.content_text.lower()
+        for message in run_messages
+    )
+    assert any(
+        message.message_type == "workflow_status"
+        and message.run_id == review_run.id
+        and "waiting for review" in message.content_text.lower()
+        for message in run_messages
+    )
+    assert any(
+        message.message_type == "assistant_reply"
+        and message.run_id == review_run.id
+        and "needs review" in message.content_text.lower()
+        for message in run_messages
+    )

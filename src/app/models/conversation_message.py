@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.common import CreatedAtMixin, UUIDPrimaryKeyMixin, status_check
-
 
 if TYPE_CHECKING:
     from app.models.conversation_thread import ConversationThread
@@ -35,6 +35,22 @@ class ConversationMessage(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             "message_type <> 'user_turn' OR run_id IS NULL",
             name="user_turn_run_id_null",
         ),
+        CheckConstraint(
+            "message_type = 'user_turn' OR request_id IS NULL",
+            name="non_user_turn_request_id_null",
+        ),
+        CheckConstraint(
+            "message_type = 'user_turn' OR request_payload_json IS NULL",
+            name="non_user_turn_request_payload_null",
+        ),
+        Index(
+            "uq_conversation_messages_tenant_user_request_id",
+            "tenant_id",
+            "created_by_user_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("message_type = 'user_turn' AND request_id IS NOT NULL"),
+        ),
     )
 
     tenant_id: Mapped[UUID] = mapped_column(
@@ -58,13 +74,20 @@ class ConversationMessage(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     message_type: Mapped[str] = mapped_column(String(32), nullable=False)
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    request_payload_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True),
+        nullable=True,
+    )
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
-    tenant: Mapped["Tenant"] = relationship(back_populates="conversation_messages")
-    thread: Mapped["ConversationThread"] = relationship(back_populates="messages")
-    run: Mapped["WorkflowRun | None"] = relationship(back_populates="messages")
-    created_by_user: Mapped["User | None"] = relationship(back_populates="created_conversation_messages")
+    tenant: Mapped[Tenant] = relationship(back_populates="conversation_messages")
+    thread: Mapped[ConversationThread] = relationship(back_populates="messages")
+    run: Mapped[WorkflowRun | None] = relationship(back_populates="messages")
+    created_by_user: Mapped[User | None] = relationship(
+        back_populates="created_conversation_messages"
+    )

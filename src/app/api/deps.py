@@ -8,10 +8,31 @@ from app.auth.fake_adapter import FakeAuthAdapter
 from app.auth.types import AuthIdentity, RequestContext, ResolvedMembership, ResolvedUser
 from app.config import Settings, get_settings
 from app.db.session import AsyncSession, get_db_session, get_optional_db_session
+from app.models import User
+from app.repositories.user_repository import UserRepository
+from app.services.errors import ServiceError
+from app.services.runtime import WorkflowExecutor
+from app.services.tenancy import TenancyService
+
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except ModuleNotFoundError:  # pragma: no cover - dev dependency guard
+    SQLAlchemyError = Exception  # type: ignore[assignment]
 
 
 def get_agent_system(request: Request) -> AgentSystem:
     return request.app.state.agent_system
+
+
+def get_workflow_executor(request: Request) -> WorkflowExecutor:
+    executor = getattr(request.app.state, "workflow_executor", None)
+    if executor is None:
+        raise ServiceError(
+            status_code=503,
+            error_code="workflow_executor_unavailable",
+            message="Workflow executor is not configured for this application instance.",
+        )
+    return executor
 
 
 def get_request_id(request: Request) -> str:
@@ -67,10 +88,34 @@ def get_current_user(
     )
 
 
-def get_current_memberships(
+async def get_current_memberships(
     settings: Annotated[Settings, Depends(get_settings_dependency)],
     user: Annotated[ResolvedUser, Depends(get_current_user)],
+    identity: Annotated[AuthIdentity, Depends(get_auth_identity)],
+    db_session: Annotated[AsyncSession | None, Depends(get_optional_db_session)],
 ) -> list[ResolvedMembership]:
+    if db_session is not None:
+        try:
+            persisted_memberships = await TenancyService(db_session).list_user_tenants(
+                identity=identity
+            )
+        except SQLAlchemyError:
+            persisted_memberships = []
+        else:
+            return [
+                ResolvedMembership(
+                    tenant_id=str(membership.tenant_id),
+                    tenant_name=tenant.name,
+                    user_id=str(membership.user_id),
+                    role=membership.role,
+                    status=membership.status,
+                )
+                for membership, tenant in persisted_memberships
+            ]
+
+    if not settings.fake_auth_enabled:
+        return []
+
     return [
         ResolvedMembership(
             tenant_id=settings.fake_auth_tenant_id,
@@ -123,7 +168,37 @@ def require_tenant_request_context(
     return context
 
 
+def require_chat_request_id(request: Request) -> str:
+    request_id = (request.headers.get("X-Request-ID") or "").strip()
+    if not request_id:
+        raise ServiceError(
+            status_code=422,
+            error_code="validation_error",
+            message="X-Request-ID header is required for chat stream requests.",
+            details={"header": "X-Request-ID"},
+        )
+    return request_id
+
+
+async def get_persisted_actor_user(
+    identity: Annotated[AuthIdentity, Depends(get_auth_identity)],
+    db_session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> User:
+    users = UserRepository(db_session)
+    user = await users.get_by_external_auth_subject(
+        external_auth_subject=identity.external_auth_subject
+    )
+    if user is None:
+        user = await users.create(
+            external_auth_subject=identity.external_auth_subject,
+            email=identity.email,
+            display_name=identity.display_name,
+        )
+    return user
+
+
 AgentSystemDep = Annotated[AgentSystem, Depends(get_agent_system)]
+WorkflowExecutorDep = Annotated[WorkflowExecutor, Depends(get_workflow_executor)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dependency)]
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 OptionalDbSessionDep = Annotated[AsyncSession | None, Depends(get_optional_db_session)]
@@ -133,3 +208,5 @@ RequestContextDep = Annotated[RequestContext, Depends(get_request_context)]
 TenantRequestContextDep = Annotated[RequestContext, Depends(require_tenant_request_context)]
 AuthIdentityDep = Annotated[AuthIdentity, Depends(get_auth_identity)]
 RequestIdDep = Annotated[str, Depends(get_request_id)]
+ChatRequestIdDep = Annotated[str, Depends(require_chat_request_id)]
+PersistedActorUserDep = Annotated[User, Depends(get_persisted_actor_user)]
