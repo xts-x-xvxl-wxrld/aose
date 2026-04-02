@@ -35,9 +35,11 @@ from app.tools.contracts import (
     WebSearchRequest,
     WebSearchResponse,
     WebSearchTool,
+    get_tool_provider_name,
 )
 from app.workers.runtime import WorkflowExecutionError, WorkflowExecutionResult
 from app.workflows.contracts import AccountResearchRunResult, AccountResearchRunResultOutcome
+from app.workflows.reasoning import validate_account_research_reasoning
 
 MAX_RESEARCH_SEARCH_RESULTS = 3
 
@@ -344,11 +346,12 @@ class AccountResearchWorkflow:
             domain=account.domain or account.normalized_domain,
             company_name=account.name,
         )
+        company_enrichment_provider = get_tool_provider_name(company_enrichment)
         await self._run_service.emit_tool_started(
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="company_enrichment",
-            provider_name=None,
+            provider_name=company_enrichment_provider,
             input_summary=f"Enriching account context for {account.name}.",
             correlation_key=f"account-research-{run_id}-company-enrichment",
         )
@@ -357,7 +360,7 @@ class AccountResearchWorkflow:
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="company_enrichment",
-            provider_name=None,
+            provider_name=company_enrichment_provider,
             output_summary=(
                 "Resolved provider-backed company context."
                 if response.company_profile
@@ -386,11 +389,12 @@ class AccountResearchWorkflow:
             workflow_input=workflow_input,
             plan=plan,
         )
+        web_search_provider = get_tool_provider_name(self._tools.web_search)
         await self._run_service.emit_tool_started(
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="web_search",
-            provider_name=None,
+            provider_name=web_search_provider,
             input_summary=f"Researching public evidence with query: {query}",
             correlation_key=f"account-research-{run_id}-web-search",
         )
@@ -402,7 +406,7 @@ class AccountResearchWorkflow:
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="web_search",
-            provider_name=None,
+            provider_name=web_search_provider,
             output_summary=f"Collected {len(search_results)} search result(s).",
             error_code=response.error_code,
             produced_evidence_results=bool(search_results),
@@ -513,11 +517,12 @@ class AccountResearchWorkflow:
             gathered_context=gathered_context,
         )
 
+        content_normalizer_provider = get_tool_provider_name(self._tools.content_normalizer)
         await self._run_service.emit_tool_started(
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="content_normalizer",
-            provider_name=None,
+            provider_name=content_normalizer_provider,
             input_summary=f"Normalizing research context for {account.name}.",
             correlation_key=f"account-research-{run_id}-content-normalizer",
         )
@@ -544,6 +549,27 @@ class AccountResearchWorkflow:
                 schema_hint="account_research_summary",
             )
         )
+        reasoning_output = validate_account_research_reasoning(response.normalized_payload)
+        if reasoning_output is None:
+            await self._run_service.emit_reasoning_failed_validation(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                schema_name="account_research_summary",
+                provider_name=content_normalizer_provider,
+                failure_summary="Structured account-research synthesis did not match schema.",
+                fallback_summary="Falling back to deterministic research synthesis.",
+            )
+        else:
+            await self._run_service.emit_reasoning_validated(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                schema_name="account_research_summary",
+                provider_name=content_normalizer_provider,
+                output_summary=(
+                    f"Validated account research synthesis with "
+                    f"{len(reasoning_output.key_findings)} key findings."
+                ),
+            )
         parsed_record = _parse_research_record(response.normalized_payload)
         research_record = _merge_research_records(
             parsed_record=parsed_record,
@@ -554,7 +580,7 @@ class AccountResearchWorkflow:
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="content_normalizer",
-            provider_name=None,
+            provider_name=content_normalizer_provider,
             output_summary="Produced normalized account research output.",
             error_code=response.error_code,
             produced_evidence_results=bool(research_record.evidence),

@@ -19,6 +19,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Some local test runs reset the schema between Alembic invocations but can leave
+    # behind the composite type name for the first table in a bad transaction state.
+    # Clearing the type defensively keeps the migration path deterministic.
+    op.execute("DROP TYPE IF EXISTS public.users CASCADE")
     op.create_table(
         "users",
         sa.Column("external_auth_subject", sa.String(length=255), nullable=False),

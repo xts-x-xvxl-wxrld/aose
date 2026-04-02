@@ -1,6 +1,6 @@
 """phase2 chat turn idempotency
 
-Revision ID: 0004_phase2_chat_turn_idempotency
+Revision ID: 0004_phase2_chat_idem
 Revises: 0003_phase2_chat_thread_context
 Create Date: 2026-04-01 19:10:00
 """
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "0004_phase2_chat_turn_idempotency"
+revision: str = "0004_phase2_chat_idem"
 down_revision: str | None = "0003_phase2_chat_thread_context"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None

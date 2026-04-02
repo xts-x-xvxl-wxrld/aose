@@ -330,6 +330,12 @@ async def test_contact_search_workflow_merges_email_before_linkedin_and_uses_sna
         str(email_match_contact.id),
         str(new_contact.id),
     }
+    events = await run_service.list_events_for_run(tenant_id=tenant.id, run_id=run.id)
+    event_names = [event.event_name for event in events]
+    assert event_names[0:2] == ["run.started", "agent.handoff"]
+    assert event_names[-2:] == ["agent.completed", "run.completed"]
+    assert "reasoning.validated" in event_names
+    assert "candidate.accepted" in event_names
 
 
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires TEST_DATABASE_URL")

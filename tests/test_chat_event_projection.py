@@ -69,6 +69,35 @@ def test_project_run_event_maps_tool_and_agent_events_to_chat_meta() -> None:
     assert handoff_projection.payload["to_agent"] == "researcher"
 
 
+def test_project_run_event_maps_phase3_reasoning_and_routing_events() -> None:
+    run = _run(status="running")
+
+    reasoning_projection = project_run_event(
+        run=run,
+        run_event=_event(
+            event_name="reasoning.validated",
+            payload_json={"schema_name": "contact_search_candidates"},
+        ),
+    )
+    routing_projection = project_run_event(
+        run=run,
+        run_event=_event(
+            event_name="provider.routing_decision",
+            payload_json={"selected_provider": "findymail"},
+        ),
+    )
+
+    assert reasoning_projection is not None
+    assert reasoning_projection.type == "reasoning_validated"
+    assert reasoning_projection.workflow_status == "running"
+    assert reasoning_projection.payload["schema_name"] == "contact_search_candidates"
+
+    assert routing_projection is not None
+    assert routing_projection.type == "provider_routing_decision"
+    assert routing_projection.workflow_status == "running"
+    assert routing_projection.payload["selected_provider"] == "findymail"
+
+
 def test_project_run_timeline_uses_durable_events_and_terminal_status() -> None:
     run = _run(status="succeeded")
     run_events = [

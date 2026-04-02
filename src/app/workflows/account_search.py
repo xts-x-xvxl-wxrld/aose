@@ -26,8 +26,10 @@ from app.tools.contracts import (
     WebSearchRequest,
     WebSearchResponse,
     WebSearchTool,
+    get_tool_provider_name,
 )
 from app.workers.runtime import WorkflowExecutionError, WorkflowExecutionResult
+from app.workflows.reasoning import validate_account_search_reasoning
 from app.workflows.contracts import AccountSearchRunResult, AccountSearchRunResultOutcome
 
 MAX_ACCOUNT_SEARCH_ATTEMPTS = 2
@@ -279,6 +281,34 @@ class AccountSearchWorkflow:
                 candidates=normalized_candidates,
                 prior_attempts=prior_attempts,
             )
+            selected_keys = {
+                (_normalize_optional_text(candidate.name) or "", _normalize_domain(candidate.domain) or "")
+                for candidate in selection.accepted_candidates
+            }
+            for candidate in selection.accepted_candidates:
+                await self._run_service.emit_candidate_accepted(
+                    tenant_id=request.tenant_id,
+                    run_id=request.run_id,
+                    entity_type="account",
+                    candidate_label=candidate.name,
+                    reason_summary=selection.reason_summary,
+                    provider_name=_candidate_provider_name(candidate),
+                )
+            for candidate in normalized_candidates:
+                candidate_key = (
+                    _normalize_optional_text(candidate.name) or "",
+                    _normalize_domain(candidate.domain) or "",
+                )
+                if candidate_key in selected_keys:
+                    continue
+                await self._run_service.emit_candidate_rejected(
+                    tenant_id=request.tenant_id,
+                    run_id=request.run_id,
+                    entity_type="account",
+                    candidate_label=candidate.name,
+                    reason_summary="Candidate did not meet precision-first acceptance rules.",
+                    provider_name=_candidate_provider_name(candidate),
+                )
             persisted_account_ids, persisted_evidence_ids = await self._persist_candidates(
                 tenant_id=request.tenant_id,
                 run_id=request.run_id,
@@ -345,13 +375,14 @@ class AccountSearchWorkflow:
         plan: AccountSearchPlan,
     ) -> list[AccountCandidateRecord]:
         search_results: list[SearchResultRecord] = []
+        web_search_provider = get_tool_provider_name(self._tools.web_search)
         for query_index, query in enumerate(plan.query_ideas or [seller_profile.company_name], start=1):
             correlation_key = f"account-search-{run_id}-{attempt_number}-search-{query_index}"
             await self._run_service.emit_tool_started(
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="web_search",
-                provider_name=None,
+                provider_name=web_search_provider,
                 input_summary=f"Searching for account candidates with query: {query}",
                 correlation_key=correlation_key,
             )
@@ -362,7 +393,7 @@ class AccountSearchWorkflow:
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="web_search",
-                provider_name=None,
+                provider_name=web_search_provider,
                 output_summary=f"Collected {len(response.results)} search result(s).",
                 error_code=response.error_code,
                 produced_evidence_results=bool(response.results),
@@ -371,11 +402,12 @@ class AccountSearchWorkflow:
                 search_results.extend(response.results)
 
         search_results = _dedupe_search_results(search_results)
+        content_normalizer_provider = get_tool_provider_name(self._tools.content_normalizer)
         await self._run_service.emit_tool_started(
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="content_normalizer",
-            provider_name=None,
+            provider_name=content_normalizer_provider,
             input_summary=f"Normalizing {len(search_results)} account candidate search result(s).",
             correlation_key=f"account-search-{run_id}-{attempt_number}-normalize",
         )
@@ -391,7 +423,32 @@ class AccountSearchWorkflow:
                 schema_hint="account_search_candidates",
             )
         )
-        normalized_candidates = _parse_candidates(response.normalized_payload)
+        reasoning_output = validate_account_search_reasoning(response.normalized_payload)
+        if reasoning_output is None:
+            await self._run_service.emit_reasoning_failed_validation(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                schema_name="account_search_candidates",
+                provider_name=content_normalizer_provider,
+                failure_summary="Structured account-search reasoning output did not match schema.",
+                fallback_summary="Falling back to deterministic candidate parsing.",
+            )
+            normalized_candidates = _parse_candidates(response.normalized_payload)
+        else:
+            await self._run_service.emit_reasoning_validated(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                schema_name="account_search_candidates",
+                provider_name=content_normalizer_provider,
+                output_summary=(
+                    f"Validated {len(reasoning_output.accepted_candidates)} accepted and "
+                    f"{len(reasoning_output.rejected_candidates)} rejected account candidates."
+                ),
+            )
+            normalized_candidates = [
+                _account_candidate_from_reasoning(candidate)
+                for candidate in reasoning_output.accepted_candidates
+            ]
         normalized_candidates = await self._maybe_enrich_candidates(
             tenant_id=tenant_id,
             run_id=run_id,
@@ -402,7 +459,7 @@ class AccountSearchWorkflow:
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="content_normalizer",
-            provider_name=None,
+            provider_name=content_normalizer_provider,
             output_summary=f"Normalized {len(normalized_candidates)} account candidate(s).",
             error_code=response.error_code,
             produced_evidence_results=bool(normalized_candidates),
@@ -421,6 +478,7 @@ class AccountSearchWorkflow:
             return list(candidates)
 
         enriched_candidates: list[AccountCandidateRecord] = []
+        company_enrichment_provider = get_tool_provider_name(self._tools.company_enrichment)
         for candidate_index, candidate in enumerate(candidates, start=1):
             if not candidate.domain:
                 enriched_candidates.append(candidate)
@@ -430,7 +488,7 @@ class AccountSearchWorkflow:
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="company_enrichment",
-                provider_name=None,
+                provider_name=company_enrichment_provider,
                 input_summary=f"Enriching company data for {candidate.domain}.",
                 correlation_key=correlation_key,
             )
@@ -441,7 +499,7 @@ class AccountSearchWorkflow:
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="company_enrichment",
-                provider_name=None,
+                provider_name=company_enrichment_provider,
                 output_summary=(
                     "Resolved provider company data."
                     if response.company_profile
@@ -622,7 +680,7 @@ def _apply_company_enrichment(
     *,
     candidate: AccountCandidateRecord,
     response: CompanyEnrichmentResponse,
-) -> AccountCandidateRecord:
+    ) -> AccountCandidateRecord:
     replacement_data = dict(candidate.canonical_data_json or {})
     if response.company_profile:
         replacement_data = _merge_json_payloads(replacement_data, response.company_profile)
@@ -643,6 +701,32 @@ def _apply_company_enrichment(
             "canonical_data_json": replacement_data or None,
             "evidence": evidence,
         }
+    )
+
+
+def _candidate_provider_name(candidate: AccountCandidateRecord) -> str | None:
+    for evidence in candidate.evidence:
+        if evidence.provider_name:
+            return evidence.provider_name
+    return None
+
+
+def _account_candidate_from_reasoning(candidate: Any) -> AccountCandidateRecord:
+    return AccountCandidateRecord(
+        name=candidate.name,
+        domain=_normalize_domain(candidate.website_url or candidate.domain),
+        linkedin_url=_normalize_optional_text(candidate.linkedin_url),
+        hq_location=_normalize_optional_text(candidate.hq_location),
+        employee_range=_normalize_optional_text(candidate.employee_range),
+        industry=_normalize_optional_text(candidate.industry),
+        fit_summary=_normalize_optional_text(candidate.fit_summary or candidate.why_selected),
+        fit_signals_json=candidate.fit_signals_json,
+        canonical_data_json=candidate.canonical_data_json,
+        evidence=[
+            CandidateEvidenceRecord.model_validate(evidence)
+            for evidence in candidate.evidence
+            if isinstance(evidence, dict)
+        ],
     )
 
 

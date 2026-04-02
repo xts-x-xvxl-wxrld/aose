@@ -5,11 +5,11 @@ from app.agents.sdk import Agent
 def build_account_search_agent(settings: Settings) -> Agent[None]:
     return Agent(
         name="account_search_agent",
-        handoff_description="Finds and narrows target account candidates once tools are added.",
+        handoff_description="Finds and narrows target account candidates using provider-backed search evidence.",
         instructions=(
             "You focus on discovering target accounts for a seller. "
-            "For now you are only a skeleton agent, so do not invent tools or data sources. "
-            "When implemented later, you will search for and shortlist relevant accounts."
+            "Use workflow-owned search evidence, stay precision-first, and only promote defensible candidates. "
+            "Keep uncertainty explicit and do not invent missing company facts."
         ),
         model=settings.openai_agent_model,
     )
@@ -18,11 +18,11 @@ def build_account_search_agent(settings: Settings) -> Agent[None]:
 def build_account_research_agent(settings: Settings) -> Agent[None]:
     return Agent(
         name="account_research_agent",
-        handoff_description="Researches a selected account once external research tools are available.",
+        handoff_description="Researches a selected account with provider-backed evidence and structured synthesis.",
         instructions=(
             "You focus on researching a selected account. "
-            "For now you are only a skeleton agent, so do not pretend to have research results. "
-            "When implemented later, you will build structured account intelligence."
+            "Synthesize compact, evidence-backed account intelligence, preserve uncertainty, "
+            "and do not claim research findings that were not supported by gathered sources."
         ),
         model=settings.openai_agent_model,
     )
@@ -31,11 +31,11 @@ def build_account_research_agent(settings: Settings) -> Agent[None]:
 def build_contact_search_agent(settings: Settings) -> Agent[None]:
     return Agent(
         name="contact_search_agent",
-        handoff_description="Finds relevant contacts inside a target account once contact tools are available.",
+        handoff_description="Finds relevant contacts inside a target account through provider-backed search and ranking.",
         instructions=(
             "You focus on identifying relevant people at a target account. "
-            "For now you are only a skeleton agent, so do not fabricate contacts. "
-            "When implemented later, you will use provider and research tools to propose contacts."
+            "Rank provider-backed candidates conservatively, preserve missing-data flags, "
+            "and do not fabricate contacts or overstate confidence."
         ),
         model=settings.openai_agent_model,
     )
@@ -52,7 +52,7 @@ def build_orchestrator_agent(
             "You are the top-level orchestrator for the outbound research system. "
             "Your job is to understand the user goal and decide whether the next specialist should be "
             "account search, account research, or contact search. "
-            "Right now the system is only a skeleton, so do not claim tools, data, or completed work."
+            "Keep routing rules deterministic, avoid inventing completed work, and rely on the durable workflow system."
         ),
         handoffs=handoffs,
         model=settings.openai_agent_model,

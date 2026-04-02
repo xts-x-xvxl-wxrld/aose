@@ -357,6 +357,138 @@ class WorkflowRunService:
             },
         )
 
+    async def emit_tool_failed(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        tool_name: str,
+        failure_summary: str,
+        provider_name: str | None = None,
+        error_code: str | None = None,
+    ) -> RunEvent:
+        return await self.emit_event(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_name=RunEventName.TOOL_FAILED,
+            payload_json={
+                "tool_name": tool_name,
+                "provider_name": provider_name,
+                "failure_summary": failure_summary,
+                "error_code": error_code,
+            },
+        )
+
+    async def emit_reasoning_validated(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        schema_name: str,
+        output_summary: str,
+        provider_name: str | None = None,
+    ) -> RunEvent:
+        return await self.emit_event(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_name=RunEventName.REASONING_VALIDATED,
+            payload_json={
+                "schema_name": schema_name,
+                "provider_name": provider_name,
+                "output_summary": output_summary,
+            },
+        )
+
+    async def emit_reasoning_failed_validation(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        schema_name: str,
+        failure_summary: str,
+        provider_name: str | None = None,
+        fallback_summary: str | None = None,
+    ) -> RunEvent:
+        return await self.emit_event(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_name=RunEventName.REASONING_FAILED_VALIDATION,
+            payload_json={
+                "schema_name": schema_name,
+                "provider_name": provider_name,
+                "failure_summary": failure_summary,
+                "fallback_summary": fallback_summary,
+            },
+        )
+
+    async def emit_candidate_accepted(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        entity_type: str,
+        candidate_label: str,
+        reason_summary: str | None = None,
+        provider_name: str | None = None,
+    ) -> RunEvent:
+        return await self.emit_event(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_name=RunEventName.CANDIDATE_ACCEPTED,
+            payload_json={
+                "entity_type": entity_type,
+                "candidate_label": candidate_label,
+                "reason_summary": reason_summary,
+                "provider_name": provider_name,
+            },
+        )
+
+    async def emit_candidate_rejected(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        entity_type: str,
+        candidate_label: str,
+        reason_summary: str | None = None,
+        provider_name: str | None = None,
+    ) -> RunEvent:
+        return await self.emit_event(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_name=RunEventName.CANDIDATE_REJECTED,
+            payload_json={
+                "entity_type": entity_type,
+                "candidate_label": candidate_label,
+                "reason_summary": reason_summary,
+                "provider_name": provider_name,
+            },
+        )
+
+    async def emit_provider_routing_decision(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        capability: str,
+        selected_provider: str,
+        fallback_provider: str | None = None,
+        routing_basis: str | None = None,
+        reason_summary: str | None = None,
+    ) -> RunEvent:
+        return await self.emit_event(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_name=RunEventName.PROVIDER_ROUTING_DECISION,
+            payload_json={
+                "capability": capability,
+                "selected_provider": selected_provider,
+                "fallback_provider": fallback_provider,
+                "routing_basis": routing_basis,
+                "reason_summary": reason_summary,
+            },
+        )
+
     def build_execution_request(
         self,
         *,

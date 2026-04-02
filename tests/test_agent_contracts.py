@@ -33,7 +33,7 @@ def test_agent_registry_description_stays_stable_for_smoke_inspection() -> None:
     ]
 
 
-def test_skeleton_agents_keep_no_fabrication_guardrails_in_instructions() -> None:
+def test_phase3_agents_use_workflow_scoped_instructions_with_guardrails() -> None:
     settings = Settings()
     account_search = build_account_search_agent(settings)
     account_research = build_account_research_agent(settings)
@@ -43,8 +43,11 @@ def test_skeleton_agents_keep_no_fabrication_guardrails_in_instructions() -> Non
         handoffs=[account_search, account_research, contact_search],
     )
 
-    assert "do not invent tools or data sources" in (account_search.instructions or "")
-    assert "do not pretend to have research results" in (account_research.instructions or "")
+    assert "precision-first" in (account_search.instructions or "")
+    assert "do not invent missing company facts" in (account_search.instructions or "")
+    assert "evidence-backed account intelligence" in (account_research.instructions or "")
+    assert "do not claim research findings" in (account_research.instructions or "")
+    assert "preserve missing-data flags" in (contact_search.instructions or "")
     assert "do not fabricate contacts" in (contact_search.instructions or "")
-    assert "do not claim tools, data, or completed work" in (orchestrator.instructions or "")
-
+    assert "routing rules deterministic" in (orchestrator.instructions or "")
+    assert "avoid inventing completed work" in (orchestrator.instructions or "")

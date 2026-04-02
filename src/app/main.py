@@ -27,7 +27,10 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name)
     app.state.agent_system = build_agent_system(settings)
-    app.state.workflow_executor = build_workflow_executor(get_session_factory())
+    app.state.workflow_executor = build_workflow_executor(
+        get_session_factory(),
+        settings=settings,
+    )
     app.add_exception_handler(ServiceError, handle_service_error)
     app.include_router(api_router, prefix=settings.api_prefix)
     return app

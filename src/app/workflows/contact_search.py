@@ -25,6 +25,10 @@ from app.repositories.source_evidence_repository import SourceEvidenceRepository
 from app.repositories.workflow_run_repository import WorkflowRunRepository
 from app.services.workflow_runs import WorkflowRunService
 from app.tools.contracts import (
+    ContactSearchProviderRequest,
+    ContactSearchProviderResponse,
+    ContactSearchProviderRoutingPolicy,
+    ContactSearchProviderTool,
     ContactEnrichmentRequest,
     ContactEnrichmentResponse,
     ContactEnrichmentTool,
@@ -35,6 +39,7 @@ from app.tools.contracts import (
     WebSearchRequest,
     WebSearchResponse,
     WebSearchTool,
+    get_tool_provider_name,
 )
 from app.workers.runtime import WorkflowExecutionError, WorkflowExecutionResult
 from app.workflows.contracts import (
@@ -42,6 +47,7 @@ from app.workflows.contracts import (
     ContactSearchRunResult,
     ContactSearchRunResultOutcome,
 )
+from app.workflows.reasoning import validate_contact_search_reasoning
 
 MAX_CONTACT_SEARCH_RESULTS = 5
 
@@ -73,6 +79,9 @@ class ContactCandidateRecord(ContactSearchModel):
     email: str | None = None
     linkedin_url: str | None = None
     phone: str | None = None
+    company_domain: str | None = None
+    source_provider: str | None = None
+    acceptance_reason: str | None = None
     ranking_summary: str | None = None
     persona_match_summary: str | None = None
     confidence_score: float | None = Field(default=None, ge=0, le=1)
@@ -94,6 +103,9 @@ class ContactSearchToolset:
     web_search: WebSearchTool
     content_normalizer: ContentNormalizerTool
     contact_enrichment: ContactEnrichmentTool | None = None
+    provider_search: ContactSearchProviderTool | None = None
+    fallback_provider_search: ContactSearchProviderTool | None = None
+    provider_routing_policy: ContactSearchProviderRoutingPolicy | None = None
 
 
 class NullWebSearchTool:
@@ -153,6 +165,14 @@ class ContactSearchWorkflow:
             reason="Starting seller-aware contact search and ranking.",
         )
 
+        provider_response = await self._run_provider_search(
+            tenant_id=request.tenant_id,
+            run_id=request.run_id,
+            account=account,
+            seller_profile=seller_profile,
+            icp_profile=icp_profile,
+            workflow_input=workflow_input,
+        )
         search_results = await self._run_web_search(
             tenant_id=request.tenant_id,
             run_id=request.run_id,
@@ -170,6 +190,7 @@ class ContactSearchWorkflow:
             icp_profile=icp_profile,
             workflow_input=workflow_input,
             latest_snapshot=latest_snapshot,
+            provider_response=provider_response,
             search_results=search_results,
         )
         enriched_candidates = await self._maybe_enrich_candidates(
@@ -233,6 +254,114 @@ class ContactSearchWorkflow:
             canonical_output_ids=canonical_output_ids,
         )
 
+    async def _run_provider_search(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        account: Account,
+        seller_profile: SellerProfile,
+        icp_profile: ICPProfile | None,
+        workflow_input: ContactSearchWorkflowInput,
+    ) -> ContactSearchProviderResponse | None:
+        provider_search = self._tools.provider_search
+        if provider_search is None:
+            return None
+
+        routing_policy = self._tools.provider_routing_policy or ContactSearchProviderRoutingPolicy(
+            primary_provider=get_tool_provider_name(provider_search) or "findymail",
+            fallback_provider=get_tool_provider_name(self._tools.fallback_provider_search),
+            routing_basis="phase3_default_findymail_primary",
+        )
+        await self._run_service.emit_provider_routing_decision(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            capability="contact_search_provider",
+            selected_provider=routing_policy.primary_provider,
+            fallback_provider=routing_policy.fallback_provider,
+            routing_basis=routing_policy.routing_basis,
+            reason_summary="Selecting the default primary provider for Phase 3 contact search.",
+        )
+
+        request = _build_provider_search_request(
+            account=account,
+            seller_profile=seller_profile,
+            icp_profile=icp_profile,
+            workflow_input=workflow_input,
+        )
+        primary_provider_name = get_tool_provider_name(provider_search)
+        await self._run_service.emit_tool_started(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            tool_name="contact_provider_search",
+            provider_name=primary_provider_name,
+            input_summary=(
+                f"Searching provider-backed contacts for {account.name} "
+                f"with {len(request.title_hints)} normalized role hint(s)."
+            ),
+            correlation_key=f"contact-search-{run_id}-provider-search-primary",
+        )
+        response = await provider_search.search(request)
+        await self._run_service.emit_tool_completed(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            tool_name="contact_provider_search",
+            provider_name=response.provider_name,
+            output_summary=response.raw_result_summary
+            or f"Retrieved {len(response.candidates)} provider candidate(s).",
+            error_code=response.error_code,
+            produced_evidence_results=bool(response.candidates),
+        )
+
+        should_fallback = (
+            self._tools.fallback_provider_search is not None
+            and (
+                response.error_code in {
+                    "provider_auth_error",
+                    "provider_rate_limit",
+                    "provider_quota_exceeded",
+                    "provider_unavailable",
+                }
+                or not response.candidates
+            )
+        )
+        if not should_fallback:
+            return response
+
+        fallback_provider_name = get_tool_provider_name(self._tools.fallback_provider_search)
+        await self._run_service.emit_provider_routing_decision(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            capability="contact_search_provider",
+            selected_provider=fallback_provider_name or "tomba",
+            fallback_provider=None,
+            routing_basis="phase3_explicit_fallback_rule",
+            reason_summary=(
+                "Primary provider triggered fallback due to "
+                f"{response.error_code or 'explicit no-results'}."
+            ),
+        )
+        await self._run_service.emit_tool_started(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            tool_name="contact_provider_search",
+            provider_name=fallback_provider_name,
+            input_summary=f"Falling back to provider-backed contact search for {account.name}.",
+            correlation_key=f"contact-search-{run_id}-provider-search-fallback",
+        )
+        fallback_response = await self._tools.fallback_provider_search.search(request)
+        await self._run_service.emit_tool_completed(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            tool_name="contact_provider_search",
+            provider_name=fallback_response.provider_name,
+            output_summary=fallback_response.raw_result_summary
+            or f"Retrieved {len(fallback_response.candidates)} provider candidate(s).",
+            error_code=fallback_response.error_code,
+            produced_evidence_results=bool(fallback_response.candidates),
+        )
+        return fallback_response
+
     async def _run_web_search(
         self,
         *,
@@ -245,6 +374,7 @@ class ContactSearchWorkflow:
         latest_snapshot: AccountResearchSnapshot | None,
     ) -> list[SearchResultRecord]:
         search_results: list[SearchResultRecord] = []
+        web_search_provider = get_tool_provider_name(self._tools.web_search)
         for query_index, query in enumerate(
             _build_search_queries(
                 account=account,
@@ -260,7 +390,7 @@ class ContactSearchWorkflow:
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="web_search",
-                provider_name=None,
+                provider_name=web_search_provider,
                 input_summary=f"Searching for contacts with query: {query}",
                 correlation_key=correlation_key,
             )
@@ -271,7 +401,7 @@ class ContactSearchWorkflow:
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="web_search",
-                provider_name=None,
+                provider_name=web_search_provider,
                 output_summary=f"Collected {len(response.results)} search result(s).",
                 error_code=response.error_code,
                 produced_evidence_results=bool(response.results),
@@ -290,6 +420,7 @@ class ContactSearchWorkflow:
         icp_profile: ICPProfile | None,
         workflow_input: ContactSearchWorkflowInput,
         latest_snapshot: AccountResearchSnapshot | None,
+        provider_response: ContactSearchProviderResponse | None,
         search_results: Sequence[SearchResultRecord],
     ) -> ContactSearchRecord:
         fallback_record = _build_fallback_contact_search_record(
@@ -298,14 +429,16 @@ class ContactSearchWorkflow:
             icp_profile=icp_profile,
             workflow_input=workflow_input,
             latest_snapshot=latest_snapshot,
+            provider_response=provider_response,
             search_results=search_results,
         )
 
+        content_normalizer_provider = get_tool_provider_name(self._tools.content_normalizer)
         await self._run_service.emit_tool_started(
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="content_normalizer",
-            provider_name=None,
+            provider_name=content_normalizer_provider,
             input_summary=(
                 "Normalizing and ranking contact candidates from "
                 f"{len(search_results)} search result(s)."
@@ -321,6 +454,11 @@ class ContactSearchWorkflow:
                         _icp_profile_payload(icp_profile) if icp_profile is not None else None
                     ),
                     "workflow_input": workflow_input.model_dump(mode="json"),
+                    "provider_response": (
+                        provider_response.model_dump(mode="json")
+                        if provider_response is not None
+                        else None
+                    ),
                     "latest_research_snapshot": (
                         _research_snapshot_payload(latest_snapshot)
                         if latest_snapshot is not None
@@ -331,16 +469,67 @@ class ContactSearchWorkflow:
                 schema_hint="contact_search_candidates",
             )
         )
+        reasoning_output = validate_contact_search_reasoning(response.normalized_payload)
+        if reasoning_output is None:
+            await self._run_service.emit_reasoning_failed_validation(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                schema_name="contact_search_candidates",
+                provider_name=content_normalizer_provider,
+                failure_summary="Structured contact-search ranking output did not match schema.",
+                fallback_summary="Falling back to provider-backed deterministic ranking.",
+            )
+        else:
+            await self._run_service.emit_reasoning_validated(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                schema_name="contact_search_candidates",
+                provider_name=content_normalizer_provider,
+                output_summary=(
+                    f"Validated {len(reasoning_output.accepted_contacts)} accepted and "
+                    f"{len(reasoning_output.rejected_contacts)} rejected contact candidates."
+                ),
+            )
         parsed_record = _parse_contact_search_record(response.normalized_payload)
         merged_record = _merge_contact_search_records(
             parsed_record=parsed_record,
             fallback_record=fallback_record,
         )
+        accepted_keys = {
+            (_normalize_optional_text(candidate.full_name) or "", _normalize_email(candidate.email) or "")
+            for candidate in merged_record.contacts
+        }
+        if reasoning_output is not None:
+            for candidate in reasoning_output.rejected_contacts:
+                await self._run_service.emit_candidate_rejected(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    entity_type="contact",
+                    candidate_label=candidate.full_name,
+                    reason_summary=candidate.acceptance_reason
+                    or "Candidate was rejected by structured ranking.",
+                    provider_name=candidate.source_provider,
+                )
+            for candidate in reasoning_output.accepted_contacts:
+                candidate_key = (
+                    _normalize_optional_text(candidate.full_name) or "",
+                    _normalize_email(candidate.email) or "",
+                )
+                if candidate_key not in accepted_keys:
+                    continue
+                await self._run_service.emit_candidate_accepted(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    entity_type="contact",
+                    candidate_label=candidate.full_name,
+                    reason_summary=candidate.acceptance_reason,
+                    provider_name=candidate.source_provider,
+                )
         await self._run_service.emit_tool_completed(
             tenant_id=tenant_id,
             run_id=run_id,
             tool_name="content_normalizer",
-            provider_name=None,
+            provider_name=content_normalizer_provider,
             output_summary=(
                 f"Ranked {len(merged_record.contacts)} normalized contact candidate(s)."
             ),
@@ -361,6 +550,7 @@ class ContactSearchWorkflow:
             return list(candidates)
 
         enriched_candidates: list[ContactCandidateRecord] = []
+        contact_enrichment_provider = get_tool_provider_name(self._tools.contact_enrichment)
         for candidate_index, candidate in enumerate(candidates, start=1):
             provider_key = _extract_provider_key(candidate.person_data_json)
             contact_name = _normalize_optional_text(candidate.full_name)
@@ -374,7 +564,7 @@ class ContactSearchWorkflow:
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="contact_enrichment",
-                provider_name=None,
+                provider_name=contact_enrichment_provider,
                 input_summary=f"Enriching contact candidate {candidate.full_name}.",
                 correlation_key=correlation_key,
             )
@@ -390,7 +580,7 @@ class ContactSearchWorkflow:
                 tenant_id=tenant_id,
                 run_id=run_id,
                 tool_name="contact_enrichment",
-                provider_name=None,
+                provider_name=contact_enrichment_provider,
                 output_summary=(
                     "Resolved provider-backed contact data."
                     if any(
@@ -727,6 +917,7 @@ def _build_fallback_contact_search_record(
     icp_profile: ICPProfile | None,
     workflow_input: ContactSearchWorkflowInput,
     latest_snapshot: AccountResearchSnapshot | None,
+    provider_response: ContactSearchProviderResponse | None,
     search_results: Sequence[SearchResultRecord],
 ) -> ContactSearchRecord:
     target_personas = _build_target_personas(
@@ -740,10 +931,14 @@ def _build_fallback_contact_search_record(
     missing_data_flags: list[ContactMissingDataFlag] = []
     if not search_results:
         missing_data_flags.append(ContactMissingDataFlag.LOW_SOURCE_CONFIDENCE)
+    if provider_response is not None and not provider_response.candidates:
+        missing_data_flags.append(ContactMissingDataFlag.LOW_SOURCE_CONFIDENCE)
+
+    fallback_contacts = _provider_response_to_contact_candidates(provider_response)
 
     rationale = (
         f"Ranked contact candidates for {account.name} using {seller_profile.company_name} context."
-        if search_results
+        if search_results or fallback_contacts
         else (
             f"No credible contacts were identified for {account.name}; "
             "public evidence remains limited."
@@ -755,7 +950,7 @@ def _build_fallback_contact_search_record(
         selection_criteria=selection_criteria,
         ranked_contact_rationale=rationale,
         missing_data_flags=missing_data_flags,
-        contacts=[],
+        contacts=fallback_contacts,
     )
 
 
@@ -855,6 +1050,9 @@ def _apply_contact_enrichment(
             "email": response.email or candidate.email,
             "linkedin_url": response.linkedin_url or candidate.linkedin_url,
             "phone": response.phone or candidate.phone,
+            "company_domain": candidate.company_domain,
+            "source_provider": candidate.source_provider,
+            "acceptance_reason": candidate.acceptance_reason,
             "person_data_json": replacement_person_data or None,
             "evidence": evidence,
         }
@@ -880,6 +1078,9 @@ def _build_contact_person_data(
         "target_personas": list(target_personas),
         "selection_criteria": list(selection_criteria),
         "persona_match_summary": candidate.persona_match_summary,
+        "source_provider": candidate.source_provider,
+        "acceptance_reason": candidate.acceptance_reason,
+        "company_domain": candidate.company_domain,
         "missing_data_flags": [flag.value for flag in candidate.missing_data_flags],
         "confidence_score": candidate.confidence_score,
     }
@@ -942,6 +1143,115 @@ def _dedupe_search_results(results: Iterable[SearchResultRecord]) -> list[Search
         seen_keys.add(key)
         deduped.append(result)
     return deduped
+
+
+def _build_provider_search_request(
+    *,
+    account: Account,
+    seller_profile: SellerProfile,
+    icp_profile: ICPProfile | None,
+    workflow_input: ContactSearchWorkflowInput,
+) -> ContactSearchProviderRequest:
+    target_personas = _build_target_personas(seller_profile=seller_profile, icp_profile=icp_profile)
+    title_hints = _normalize_role_hints(target_personas, workflow_input.contact_objective)
+    selected_people = _extract_selected_people_hint(workflow_input.contact_objective)
+    return ContactSearchProviderRequest(
+        account_id=account.id,
+        account_name=account.name,
+        account_domain=account.domain or account.normalized_domain,
+        account_country=account.hq_location,
+        persona_hints=target_personas,
+        title_hints=title_hints,
+        region_hint=_normalize_optional_text(account.hq_location),
+        selected_people=selected_people,
+        linkedin_urls=[],
+    )
+
+
+def _normalize_role_hints(personas: Sequence[str], contact_objective: str | None) -> list[str]:
+    normalized_roles: list[str] = []
+    raw_values = [*personas]
+    if contact_objective:
+        raw_values.append(contact_objective)
+    joined = " ".join(raw_values).lower()
+    if "founder" in joined:
+        normalized_roles.append("founder")
+    if "executive" in joined or "chief" in joined or "vp" in joined:
+        normalized_roles.append("executive")
+    if "sales" in joined:
+        normalized_roles.append("sales leader")
+    if "marketing" in joined:
+        normalized_roles.append("marketing leader")
+    if "operations" in joined or "ops" in joined or "revops" in joined:
+        normalized_roles.append("operations leader")
+    if not normalized_roles:
+        normalized_roles.append("operations leader")
+    return _dedupe_strings(normalized_roles)[:3]
+
+
+def _extract_selected_people_hint(contact_objective: str | None) -> list[str]:
+    objective = _normalize_optional_text(contact_objective)
+    if objective is None:
+        return []
+    words = objective.split()
+    likely_name_parts = [part for part in words if part[:1].isupper()]
+    if len(likely_name_parts) >= 2:
+        return [" ".join(likely_name_parts[:2])]
+    return []
+
+
+def _provider_response_to_contact_candidates(
+    response: ContactSearchProviderResponse | None,
+) -> list[ContactCandidateRecord]:
+    if response is None:
+        return []
+    candidates: list[ContactCandidateRecord] = []
+    for candidate in response.candidates:
+        full_name = _normalize_optional_text(candidate.full_name)
+        if full_name is None:
+            continue
+        person_data = dict(candidate.provider_metadata or {})
+        if candidate.provider_key:
+            person_data["provider_key"] = candidate.provider_key
+        candidates.append(
+            ContactCandidateRecord(
+                full_name=full_name,
+                email=_normalize_email(candidate.email),
+                linkedin_url=_normalize_optional_text(candidate.linkedin_url),
+                job_title=_normalize_optional_text(candidate.job_title),
+                company_domain=_normalize_domain(candidate.company_domain),
+                source_provider=candidate.source_provider,
+                acceptance_reason=_normalize_optional_text(candidate.acceptance_reason),
+                confidence_score=candidate.confidence_0_1,
+                person_data_json=person_data or None,
+                evidence=[
+                    ContactCandidateEvidenceRecord(
+                        source_type="provider",
+                        provider_name=source_reference.provider_name,
+                        source_url=source_reference.source_url,
+                        title=source_reference.title,
+                    )
+                    for source_reference in candidate.evidence_refs
+                ],
+                missing_data_flags=_dedupe_missing_data_flags(
+                    _map_missing_field_flags(candidate.missing_fields)
+                ),
+            )
+        )
+    return candidates
+
+
+def _map_missing_field_flags(missing_fields: Sequence[str]) -> list[ContactMissingDataFlag]:
+    mapped: list[ContactMissingDataFlag] = []
+    for field_name in missing_fields:
+        normalized = field_name.strip().lower()
+        if normalized == "email":
+            mapped.append(ContactMissingDataFlag.MISSING_EMAIL)
+        elif normalized in {"linkedin", "linkedin_url"}:
+            mapped.append(ContactMissingDataFlag.MISSING_LINKEDIN)
+        elif normalized in {"job_title", "title"}:
+            mapped.append(ContactMissingDataFlag.MISSING_JOB_TITLE)
+    return mapped
 
 
 def _dedupe_evidence(

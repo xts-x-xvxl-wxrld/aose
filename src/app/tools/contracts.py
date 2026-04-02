@@ -120,6 +120,48 @@ class ContactEnrichmentResponse(ToolContractModel):
     error_code: str | None = None
 
 
+class ContactSearchProviderRoutingPolicy(ToolContractModel):
+    primary_provider: str
+    fallback_provider: str | None = None
+    routing_basis: str
+
+
+class ContactSearchProviderRequest(ToolContractModel):
+    account_id: UUID
+    account_name: str | None = None
+    account_domain: str | None = None
+    account_country: str | None = None
+    persona_hints: list[str] = Field(default_factory=list)
+    title_hints: list[str] = Field(default_factory=list)
+    region_hint: str | None = None
+    selected_people: list[str] = Field(default_factory=list)
+    linkedin_urls: list[str] = Field(default_factory=list)
+
+
+class ContactSearchProviderCandidate(ToolContractModel):
+    full_name: str | None = None
+    email: str | None = None
+    linkedin_url: str | None = None
+    job_title: str | None = None
+    company_domain: str | None = None
+    source_provider: str
+    provider_key: str | None = None
+    confidence_0_1: float | None = Field(default=None, ge=0, le=1)
+    acceptance_reason: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    evidence_refs: list[ToolSourceReference] = Field(default_factory=list)
+    provider_metadata: dict[str, Any] | None = None
+
+
+class ContactSearchProviderResponse(ToolContractModel):
+    provider_name: str
+    candidates: list[ContactSearchProviderCandidate] = Field(default_factory=list)
+    raw_result_summary: str | None = None
+    quota_state: dict[str, Any] | None = None
+    errors: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+
+
 class ContentNormalizerRequest(ToolContractModel):
     raw_payload: dict[str, Any] | list[dict[str, Any]] | str
     schema_hint: str | None = None
@@ -153,3 +195,17 @@ class ContactEnrichmentTool(Protocol):
 
 class ContentNormalizerTool(Protocol):
     async def execute(self, request: ContentNormalizerRequest) -> ContentNormalizerResponse: ...
+
+
+class ContactSearchProviderTool(Protocol):
+    async def search(
+        self,
+        request: ContactSearchProviderRequest,
+    ) -> ContactSearchProviderResponse: ...
+
+
+def get_tool_provider_name(tool: object) -> str | None:
+    provider_name = getattr(tool, "provider_name", None)
+    if isinstance(provider_name, str) and provider_name.strip():
+        return provider_name
+    return None

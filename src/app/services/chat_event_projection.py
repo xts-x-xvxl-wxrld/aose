@@ -17,6 +17,12 @@ _RUNNING_META_EVENT_TYPES = {
     "agent_completed",
     "tool_started",
     "tool_completed",
+    "tool_failed",
+    "reasoning_validated",
+    "reasoning_failed_validation",
+    "candidate_accepted",
+    "candidate_rejected",
+    "provider_routing_decision",
 }
 
 
@@ -198,6 +204,18 @@ def _event_name_to_meta_type(event_name: str) -> str | None:
         return "tool_started"
     if normalized_event_name is RunEventName.TOOL_COMPLETED:
         return "tool_completed"
+    if normalized_event_name is RunEventName.TOOL_FAILED:
+        return "tool_failed"
+    if normalized_event_name is RunEventName.REASONING_VALIDATED:
+        return "reasoning_validated"
+    if normalized_event_name is RunEventName.REASONING_FAILED_VALIDATION:
+        return "reasoning_failed_validation"
+    if normalized_event_name is RunEventName.CANDIDATE_ACCEPTED:
+        return "candidate_accepted"
+    if normalized_event_name is RunEventName.CANDIDATE_REJECTED:
+        return "candidate_rejected"
+    if normalized_event_name is RunEventName.PROVIDER_ROUTING_DECISION:
+        return "provider_routing_decision"
     if normalized_event_name is RunEventName.RUN_AWAITING_REVIEW:
         return "awaiting_review"
     if normalized_event_name is RunEventName.RUN_COMPLETED:

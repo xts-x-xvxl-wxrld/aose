@@ -294,7 +294,7 @@ def test_phase_1_status_and_contract_checks_exist() -> None:
     assert "status IN ('queued', 'running', 'awaiting_review', 'succeeded', 'failed', 'cancelled')" in workflow_run_checks
 
     assert (
-        "event_name IN ('run.started', 'agent.handoff', 'agent.completed', 'tool.started', 'tool.completed', 'run.awaiting_review', 'run.completed', 'run.failed')"
+        "event_name IN ('run.started', 'agent.handoff', 'agent.completed', 'tool.started', 'tool.completed', 'tool.failed', 'reasoning.validated', 'reasoning.failed_validation', 'candidate.accepted', 'candidate.rejected', 'provider.routing_decision', 'run.awaiting_review', 'run.completed', 'run.failed')"
         in _check_constraints("run_events")
     )
 

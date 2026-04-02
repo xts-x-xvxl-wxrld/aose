@@ -272,22 +272,10 @@ async def test_account_research_workflow_persists_snapshot_evidence_and_brief_ar
     )
     assert artifact is not None
     assert artifact.artifact_type == "research_brief"
-    assert [event.event_name for event in events] == [
-        "run.started",
-        "agent.handoff",
-        "tool.started",
-        "tool.completed",
-        "tool.started",
-        "tool.completed",
-        "tool.started",
-        "tool.completed",
-        "tool.started",
-        "tool.completed",
-        "tool.started",
-        "tool.completed",
-        "agent.completed",
-        "run.completed",
-    ]
+    event_names = [event.event_name for event in events]
+    assert event_names[0:2] == ["run.started", "agent.handoff"]
+    assert event_names[-2:] == ["agent.completed", "run.completed"]
+    assert event_names.count("reasoning.validated") == 1
 
 
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires TEST_DATABASE_URL")

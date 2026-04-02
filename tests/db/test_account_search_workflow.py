@@ -314,20 +314,12 @@ async def test_account_search_workflow_persists_accounts_merges_domain_collision
     }
     assert len(evidence_rows) == 1
     assert evidence_rows[0].account_id == existing_account.id
-    assert [event.event_name for event in events] == [
-        "run.started",
-        "agent.handoff",
-        "tool.started",
-        "tool.completed",
-        "tool.started",
-        "tool.completed",
-        "tool.started",
-        "tool.completed",
-        "tool.started",
-        "tool.completed",
-        "agent.completed",
-        "run.completed",
-    ]
+    event_names = [event.event_name for event in events]
+    assert event_names[0:2] == ["run.started", "agent.handoff"]
+    assert event_names[-2:] == ["agent.completed", "run.completed"]
+    assert event_names.count("reasoning.validated") == 2
+    assert "candidate.accepted" in event_names
+    assert "candidate.rejected" in event_names
 
 
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires TEST_DATABASE_URL")

@@ -3,6 +3,10 @@
 from app.tools.contracts import (
     CompanyEnrichmentRequest,
     CompanyEnrichmentResponse,
+    ContactSearchProviderCandidate,
+    ContactSearchProviderRequest,
+    ContactSearchProviderResponse,
+    ContactSearchProviderRoutingPolicy,
     ContactEnrichmentRequest,
     ContactEnrichmentResponse,
     ContentNormalizerRequest,
@@ -13,11 +17,24 @@ from app.tools.contracts import (
     PageScrapeResponse,
     WebSearchRequest,
     WebSearchResponse,
+    get_tool_provider_name,
+)
+from app.tools.provider_errors import (
+    ProviderAuthError,
+    ProviderBadResponseError,
+    ProviderError,
+    ProviderQuotaError,
+    ProviderRateLimitError,
+    ProviderUnavailableError,
 )
 
 __all__ = [
     "CompanyEnrichmentRequest",
     "CompanyEnrichmentResponse",
+    "ContactSearchProviderCandidate",
+    "ContactSearchProviderRequest",
+    "ContactSearchProviderResponse",
+    "ContactSearchProviderRoutingPolicy",
     "ContactEnrichmentRequest",
     "ContactEnrichmentResponse",
     "ContentNormalizerRequest",
@@ -26,6 +43,13 @@ __all__ = [
     "PageFetchResponse",
     "PageScrapeRequest",
     "PageScrapeResponse",
+    "ProviderAuthError",
+    "ProviderBadResponseError",
+    "ProviderError",
+    "ProviderQuotaError",
+    "ProviderRateLimitError",
+    "ProviderUnavailableError",
     "WebSearchRequest",
     "WebSearchResponse",
+    "get_tool_provider_name",
 ]
