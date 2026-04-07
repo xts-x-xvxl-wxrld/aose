@@ -11,7 +11,7 @@ __pycache__/
 .coverage
 htmlcov/
 .DS_Store
-resources/*
+resources/
 
 # Local database and migration artifacts
 *.sqlite3
@@ -24,3 +24,5 @@ docker-compose.override.yml
 # Alembic cache artifacts
 alembic/__pycache__/
 alembic/versions/__pycache__/
+
+.claude/
