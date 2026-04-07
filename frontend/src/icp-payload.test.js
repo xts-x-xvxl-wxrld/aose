@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest'
 
-import { formatApiErrorPayload } from './api.js'
+import { formatError as formatApiErrorPayload } from './lib/api.js'
 import { parseIcpJsonInput, validateIcpPayloadShape } from './icp-payload.js'
 
 const validPayload = {

@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Contact
@@ -77,6 +77,42 @@ class ContactRepository:
         )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        account_id: UUID | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[Contact]:
+        statement = (
+            select(Contact)
+            .where(Contact.tenant_id == tenant_id)
+            .order_by(
+                Contact.updated_at.desc(),
+                Contact.created_at.desc(),
+                Contact.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+        if account_id is not None:
+            statement = statement.where(Contact.account_id == account_id)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def count_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        account_id: UUID | None = None,
+    ) -> int:
+        statement = select(func.count(Contact.id)).where(Contact.tenant_id == tenant_id)
+        if account_id is not None:
+            statement = statement.where(Contact.account_id == account_id)
+        result = await self._session.execute(statement)
+        return int(result.scalar_one())
 
     async def update(
         self,

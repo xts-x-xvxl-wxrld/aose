@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ICPProfile
@@ -49,6 +49,38 @@ class ICPProfileRepository:
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def list_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[ICPProfile]:
+        statement = (
+            select(ICPProfile)
+            .where(ICPProfile.tenant_id == tenant_id)
+            .order_by(
+                ICPProfile.updated_at.desc(),
+                ICPProfile.created_at.desc(),
+                ICPProfile.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def count_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+    ) -> int:
+        statement = select(func.count(ICPProfile.id)).where(
+            ICPProfile.tenant_id == tenant_id
+        )
+        result = await self._session.execute(statement)
+        return int(result.scalar_one())
 
     async def update(
         self,

@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app.api.deps import AuthIdentityDep, DbSessionDep
 from app.models import ICPProfile, SellerProfile
 from app.schemas.setup import (
     ICPProfileCreateRequest,
+    ICPProfileListResponse,
     ICPProfileResponse,
     ICPProfileUpdateRequest,
     SellerProfileCreateRequest,
+    SellerProfileListResponse,
     SellerProfileResponse,
     SellerProfileUpdateRequest,
 )
@@ -34,6 +36,49 @@ async def create_seller_profile(
         identity=identity,
         tenant_id=tenant_id,
         **payload.model_dump(),
+    )
+    return _to_seller_profile_response(seller_profile)
+
+
+@router.get(
+    "/tenants/{tenant_id}/seller-profiles",
+    response_model=SellerProfileListResponse,
+)
+async def list_seller_profiles(
+    tenant_id: UUID,
+    identity: AuthIdentityDep,
+    db_session: DbSessionDep,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> SellerProfileListResponse:
+    seller_profiles, total = await SetupService(db_session).list_seller_profiles(
+        identity=identity,
+        tenant_id=tenant_id,
+        limit=limit,
+        offset=offset,
+    )
+    return SellerProfileListResponse(
+        items=[_to_seller_profile_response(seller_profile) for seller_profile in seller_profiles],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/seller-profiles/{seller_profile_id}",
+    response_model=SellerProfileResponse,
+)
+async def get_seller_profile(
+    tenant_id: UUID,
+    seller_profile_id: UUID,
+    identity: AuthIdentityDep,
+    db_session: DbSessionDep,
+) -> SellerProfileResponse:
+    seller_profile = await SetupService(db_session).get_seller_profile(
+        identity=identity,
+        tenant_id=tenant_id,
+        seller_profile_id=seller_profile_id,
     )
     return _to_seller_profile_response(seller_profile)
 
@@ -73,6 +118,49 @@ async def create_icp_profile(
         identity=identity,
         tenant_id=tenant_id,
         **payload.model_dump(),
+    )
+    return _to_icp_profile_response(icp_profile)
+
+
+@router.get(
+    "/tenants/{tenant_id}/icp-profiles",
+    response_model=ICPProfileListResponse,
+)
+async def list_icp_profiles(
+    tenant_id: UUID,
+    identity: AuthIdentityDep,
+    db_session: DbSessionDep,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ICPProfileListResponse:
+    icp_profiles, total = await SetupService(db_session).list_icp_profiles(
+        identity=identity,
+        tenant_id=tenant_id,
+        limit=limit,
+        offset=offset,
+    )
+    return ICPProfileListResponse(
+        items=[_to_icp_profile_response(icp_profile) for icp_profile in icp_profiles],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/icp-profiles/{icp_profile_id}",
+    response_model=ICPProfileResponse,
+)
+async def get_icp_profile(
+    tenant_id: UUID,
+    icp_profile_id: UUID,
+    identity: AuthIdentityDep,
+    db_session: DbSessionDep,
+) -> ICPProfileResponse:
+    icp_profile = await SetupService(db_session).get_icp_profile(
+        identity=identity,
+        tenant_id=tenant_id,
+        icp_profile_id=icp_profile_id,
     )
     return _to_icp_profile_response(icp_profile)
 

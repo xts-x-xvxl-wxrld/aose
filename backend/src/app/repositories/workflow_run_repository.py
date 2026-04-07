@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import WorkflowRun
@@ -111,3 +111,18 @@ class WorkflowRunRepository:
             statement = statement.where(WorkflowRun.status == status)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def count_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        thread_id: UUID | None = None,
+        status: str | None = None,
+    ) -> int:
+        statement = select(func.count(WorkflowRun.id)).where(WorkflowRun.tenant_id == tenant_id)
+        if thread_id is not None:
+            statement = statement.where(WorkflowRun.thread_id == thread_id)
+        if status is not None:
+            statement = statement.where(WorkflowRun.status == status)
+        result = await self._session.execute(statement)
+        return int(result.scalar_one())

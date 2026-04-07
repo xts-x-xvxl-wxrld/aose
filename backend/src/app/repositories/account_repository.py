@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Account
+from app.models import Account, WorkflowRun
 
 
 class AccountRepository:
@@ -78,6 +78,70 @@ class AccountRepository:
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def list_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        seller_profile_id: UUID | None = None,
+        icp_profile_id: UUID | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[Account]:
+        statement = (
+            select(Account)
+            .join(WorkflowRun, WorkflowRun.id == Account.source_workflow_run_id)
+            .where(
+                Account.tenant_id == tenant_id,
+                WorkflowRun.tenant_id == tenant_id,
+            )
+            .order_by(
+                Account.updated_at.desc(),
+                Account.created_at.desc(),
+                Account.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+        if seller_profile_id is not None:
+            statement = statement.where(
+                WorkflowRun.requested_payload_json["seller_profile_id"].astext
+                == str(seller_profile_id)
+            )
+        if icp_profile_id is not None:
+            statement = statement.where(
+                WorkflowRun.requested_payload_json["icp_profile_id"].astext == str(icp_profile_id)
+            )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def count_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        seller_profile_id: UUID | None = None,
+        icp_profile_id: UUID | None = None,
+    ) -> int:
+        statement = (
+            select(func.count(Account.id))
+            .select_from(Account)
+            .join(WorkflowRun, WorkflowRun.id == Account.source_workflow_run_id)
+            .where(
+                Account.tenant_id == tenant_id,
+                WorkflowRun.tenant_id == tenant_id,
+            )
+        )
+        if seller_profile_id is not None:
+            statement = statement.where(
+                WorkflowRun.requested_payload_json["seller_profile_id"].astext
+                == str(seller_profile_id)
+            )
+        if icp_profile_id is not None:
+            statement = statement.where(
+                WorkflowRun.requested_payload_json["icp_profile_id"].astext == str(icp_profile_id)
+            )
+        result = await self._session.execute(statement)
+        return int(result.scalar_one())
 
     async def update(
         self,

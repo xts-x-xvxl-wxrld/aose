@@ -51,6 +51,13 @@ class SellerProfileResponse(BaseModel):
     updated_at: datetime
 
 
+class SellerProfileListResponse(BaseModel):
+    items: list[SellerProfileResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class ICPProfileCreateRequest(BaseModel):
     seller_profile_id: UUID
     name: str = Field(min_length=1, max_length=255)
@@ -80,3 +87,10 @@ class ICPProfileResponse(BaseModel):
     exclusions_json: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
+
+
+class ICPProfileListResponse(BaseModel):
+    items: list[ICPProfileResponse]
+    total: int
+    limit: int
+    offset: int

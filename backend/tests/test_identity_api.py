@@ -15,7 +15,12 @@ def test_me_endpoint_uses_fake_auth_request_context() -> None:
         yield None
 
     def override_get_settings() -> Settings:
-        return Settings(_env_file=None, auth_mode="fake", fake_auth_enabled=True, fake_auth_platform_admin=True)
+        return Settings(
+            _env_file=None,
+            auth_mode="fake",
+            fake_auth_enabled=True,
+            fake_auth_platform_admin=True,
+        )
 
     app.dependency_overrides[get_optional_db_session] = override_get_optional_db_session
     app.dependency_overrides[get_settings_dependency] = override_get_settings
@@ -39,7 +44,12 @@ def test_tenants_endpoint_returns_fake_membership() -> None:
         yield None
 
     def override_get_settings() -> Settings:
-        return Settings(_env_file=None, auth_mode="fake", fake_auth_enabled=True, fake_auth_platform_admin=True)
+        return Settings(
+            _env_file=None,
+            auth_mode="fake",
+            fake_auth_enabled=True,
+            fake_auth_platform_admin=True,
+        )
 
     app.dependency_overrides[get_optional_db_session] = override_get_optional_db_session
     app.dependency_overrides[get_settings_dependency] = override_get_settings
@@ -144,3 +154,124 @@ def test_me_endpoint_requires_bearer_auth_in_real_auth_mode() -> None:
     assert body["error_code"] == "auth_required"
     assert body["message"] == "Bearer authentication is required."
     assert "request_id" in body
+
+
+def test_tenants_endpoint_supports_real_auth_mode_without_fake_memberships() -> None:
+    app = create_app()
+
+    async def override_get_optional_db_session():
+        yield None
+
+    def override_get_settings() -> Settings:
+        return Settings(
+            _env_file=None,
+            auth_mode="zitadel",
+            fake_auth_enabled=False,
+            zitadel_issuer="https://issuer.example",
+            zitadel_audience="api-audience",
+        )
+
+    class _StubAdapter:
+        def authenticate(self, bearer_token: str | None) -> AuthIdentity:
+            if bearer_token == "real-user-subject":
+                return AuthIdentity(
+                    external_auth_subject="real-user-subject",
+                    email="real@example.com",
+                    display_name="Real User",
+                )
+            raise AuthError(
+                error_code="auth_invalid_token",
+                message="Bearer token is invalid.",
+                details={"reason": "invalid_token"},
+            )
+
+    app.dependency_overrides[get_optional_db_session] = override_get_optional_db_session
+    app.dependency_overrides[get_settings_dependency] = override_get_settings
+    app.dependency_overrides[get_auth_adapter] = lambda: _StubAdapter()
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/v1/tenants",
+        headers={"Authorization": "Bearer real-user-subject"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"tenants": []}
+
+
+def test_identity_endpoints_reject_malformed_bearer_header_in_real_auth_mode() -> None:
+    app = create_app()
+
+    async def override_get_optional_db_session():
+        yield None
+
+    def override_get_settings() -> Settings:
+        return Settings(
+            _env_file=None,
+            auth_mode="zitadel",
+            fake_auth_enabled=False,
+            zitadel_issuer="https://issuer.example",
+            zitadel_audience="api-audience",
+        )
+
+    class _StubAdapter:
+        def authenticate(self, bearer_token: str | None) -> AuthIdentity:
+            _ = bearer_token
+            raise AssertionError("Malformed Authorization headers should fail before adapter auth.")
+
+    app.dependency_overrides[get_optional_db_session] = override_get_optional_db_session
+    app.dependency_overrides[get_settings_dependency] = override_get_settings
+    app.dependency_overrides[get_auth_adapter] = lambda: _StubAdapter()
+    client = TestClient(app)
+
+    response = client.get("/api/v1/me", headers={"Authorization": "Token not-bearer"})
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error_code"] == "auth_invalid_token"
+    assert body["message"] == "Authorization header must use the Bearer scheme."
+
+
+def test_identity_endpoints_preserve_invalid_token_reason_details_in_real_auth_mode() -> None:
+    app = create_app()
+
+    async def override_get_optional_db_session():
+        yield None
+
+    def override_get_settings() -> Settings:
+        return Settings(
+            _env_file=None,
+            auth_mode="zitadel",
+            fake_auth_enabled=False,
+            zitadel_issuer="https://issuer.example",
+            zitadel_audience="api-audience",
+        )
+
+    class _StubAdapter:
+        def authenticate(self, bearer_token: str | None) -> AuthIdentity:
+            if bearer_token == "expired-token":
+                raise AuthError(
+                    error_code="auth_invalid_token",
+                    message="Bearer token is expired.",
+                    details={"reason": "expired"},
+                )
+            raise AuthError(
+                error_code="auth_required",
+                message="Bearer authentication is required.",
+            )
+
+    app.dependency_overrides[get_optional_db_session] = override_get_optional_db_session
+    app.dependency_overrides[get_settings_dependency] = override_get_settings
+    app.dependency_overrides[get_auth_adapter] = lambda: _StubAdapter()
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/v1/me",
+        headers={"Authorization": "Bearer expired-token"},
+    )
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error_code"] == "auth_invalid_token"
+    assert body["message"] == "Bearer token is expired."
+    assert body["details"] == {"reason": "expired"}

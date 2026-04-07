@@ -65,6 +65,43 @@ class SetupService:
         await self._session.refresh(seller_profile)
         return seller_profile
 
+    async def list_seller_profiles(
+        self,
+        *,
+        identity: AuthIdentity,
+        tenant_id: UUID,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[SellerProfile], int]:
+        await self._require_active_membership(identity=identity, tenant_id=tenant_id)
+        seller_profiles = await self._seller_profiles.list_for_tenant(
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+        )
+        total = await self._seller_profiles.count_for_tenant(tenant_id=tenant_id)
+        return seller_profiles, total
+
+    async def get_seller_profile(
+        self,
+        *,
+        identity: AuthIdentity,
+        tenant_id: UUID,
+        seller_profile_id: UUID,
+    ) -> SellerProfile:
+        await self._require_active_membership(identity=identity, tenant_id=tenant_id)
+        seller_profile = await self._seller_profiles.get_for_tenant(
+            tenant_id=tenant_id,
+            seller_profile_id=seller_profile_id,
+        )
+        if seller_profile is None:
+            raise ServiceError(
+                status_code=404,
+                error_code="resource_not_found",
+                message="Seller profile was not found in the requested tenant.",
+            )
+        return seller_profile
+
     async def update_seller_profile(
         self,
         *,
@@ -140,6 +177,43 @@ class SetupService:
         await self._session.refresh(icp_profile)
         return icp_profile
 
+    async def list_icp_profiles(
+        self,
+        *,
+        identity: AuthIdentity,
+        tenant_id: UUID,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[ICPProfile], int]:
+        await self._require_active_membership(identity=identity, tenant_id=tenant_id)
+        icp_profiles = await self._icp_profiles.list_for_tenant(
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+        )
+        total = await self._icp_profiles.count_for_tenant(tenant_id=tenant_id)
+        return icp_profiles, total
+
+    async def get_icp_profile(
+        self,
+        *,
+        identity: AuthIdentity,
+        tenant_id: UUID,
+        icp_profile_id: UUID,
+    ) -> ICPProfile:
+        await self._require_active_membership(identity=identity, tenant_id=tenant_id)
+        icp_profile = await self._icp_profiles.get_for_tenant(
+            tenant_id=tenant_id,
+            icp_profile_id=icp_profile_id,
+        )
+        if icp_profile is None:
+            raise ServiceError(
+                status_code=404,
+                error_code="resource_not_found",
+                message="ICP profile was not found in the requested tenant.",
+            )
+        return icp_profile
+
     async def update_icp_profile(
         self,
         *,
@@ -188,6 +262,25 @@ class SetupService:
         identity: AuthIdentity,
         tenant_id: UUID,
     ) -> tuple[User, TenantMembership]:
+        return await self._require_active_membership(
+            identity=identity,
+            tenant_id=tenant_id,
+            allowed_roles=PROFILE_EDITOR_ROLES,
+            missing_membership_message=(
+                "User does not have an active editable membership in the requested tenant."
+            ),
+        )
+
+    async def _require_active_membership(
+        self,
+        *,
+        identity: AuthIdentity,
+        tenant_id: UUID,
+        allowed_roles: set[str] | None = None,
+        missing_membership_message: str = (
+            "User does not have an active membership in the requested tenant."
+        ),
+    ) -> tuple[User, TenantMembership]:
         user = await self._users.get_by_external_auth_subject(
             external_auth_subject=identity.external_auth_subject
         )
@@ -195,7 +288,7 @@ class SetupService:
             raise ServiceError(
                 status_code=403,
                 error_code="tenant_membership_required",
-                message="User does not have an active editable membership in the requested tenant.",
+                message=missing_membership_message,
             )
 
         membership = await self._memberships.get_by_tenant_and_user(
@@ -206,13 +299,13 @@ class SetupService:
             raise ServiceError(
                 status_code=403,
                 error_code="tenant_membership_required",
-                message="User does not have an active editable membership in the requested tenant.",
+                message=missing_membership_message,
             )
-        if membership.role not in PROFILE_EDITOR_ROLES:
+        if allowed_roles is not None and membership.role not in allowed_roles:
             raise ServiceError(
                 status_code=403,
                 error_code="tenant_membership_required",
-                message="User does not have permission to edit seller or ICP context in this tenant.",
+                message=missing_membership_message,
             )
         return user, membership
 

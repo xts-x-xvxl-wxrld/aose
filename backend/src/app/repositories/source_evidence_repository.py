@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import SourceEvidence
@@ -67,3 +67,16 @@ class SourceEvidenceRepository:
         )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def count_for_run(
+        self,
+        *,
+        tenant_id: UUID,
+        workflow_run_id: UUID,
+    ) -> int:
+        statement = select(func.count(SourceEvidence.id)).where(
+            SourceEvidence.tenant_id == tenant_id,
+            SourceEvidence.workflow_run_id == workflow_run_id,
+        )
+        result = await self._session.execute(statement)
+        return int(result.scalar_one())

@@ -8,6 +8,7 @@ from app.api.v1.endpoints.identity import router as identity_router
 from app.api.v1.endpoints.review import router as review_router
 from app.api.v1.endpoints.setup import router as setup_router
 from app.api.v1.endpoints.tenancy import router as tenancy_router
+from app.api.v1.endpoints.workspace import router as workspace_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
@@ -17,4 +18,5 @@ api_router.include_router(identity_router, tags=["identity"])
 api_router.include_router(tenancy_router, tags=["tenancy"])
 api_router.include_router(chat_router, tags=["chat"])
 api_router.include_router(setup_router, tags=["setup"])
+api_router.include_router(workspace_router, tags=["workspace"])
 api_router.include_router(review_router, tags=["review"])

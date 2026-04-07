@@ -54,6 +54,23 @@ class ArtifactRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def list_for_run(
+        self,
+        *,
+        tenant_id: UUID,
+        workflow_run_id: UUID,
+    ) -> list[Artifact]:
+        statement = (
+            select(Artifact)
+            .where(
+                Artifact.tenant_id == tenant_id,
+                Artifact.workflow_run_id == workflow_run_id,
+            )
+            .order_by(Artifact.created_at.asc(), Artifact.id.asc())
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
     async def update(
         self,
         *,

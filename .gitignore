@@ -11,13 +11,12 @@ __pycache__/
 .coverage
 htmlcov/
 .DS_Store
+resources/*
 
 # Local database and migration artifacts
 *.sqlite3
 *.db
 
-# Frontend local dependencies
-frontend/node_modules/
 
 # Docker local overrides
 docker-compose.override.yml

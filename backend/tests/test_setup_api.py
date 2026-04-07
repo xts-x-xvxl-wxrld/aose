@@ -8,7 +8,12 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.db.base import Base
 from app.db.session import get_db_session, get_optional_db_session
@@ -70,6 +75,17 @@ async def test_setup_routes_create_and_update_seller_and_icp_profiles(
             assert create_tenant_response.status_code == 201
             tenant_id = create_tenant_response.json()["tenant_id"]
 
+            empty_seller_list_response = await client.get(
+                f"/api/v1/tenants/{tenant_id}/seller-profiles"
+            )
+            assert empty_seller_list_response.status_code == 200
+            assert empty_seller_list_response.json() == {
+                "items": [],
+                "total": 0,
+                "limit": 20,
+                "offset": 0,
+            }
+
             create_seller_response = await client.post(
                 f"/api/v1/tenants/{tenant_id}/seller-profiles",
                 json={
@@ -99,6 +115,23 @@ async def test_setup_routes_create_and_update_seller_and_icp_profiles(
             assert updated_seller_body["target_market_summary"] == "Mid-market software teams"
             assert updated_seller_body["updated_by_user_id"] == seller_body["created_by_user_id"]
 
+            seller_list_response = await client.get(
+                f"/api/v1/tenants/{tenant_id}/seller-profiles"
+            )
+            assert seller_list_response.status_code == 200
+            seller_list_body = seller_list_response.json()
+            assert seller_list_body["total"] == 1
+            assert (
+                seller_list_body["items"][0]["seller_profile_id"]
+                == seller_body["seller_profile_id"]
+            )
+
+            seller_detail_response = await client.get(
+                f"/api/v1/tenants/{tenant_id}/seller-profiles/{seller_body['seller_profile_id']}"
+            )
+            assert seller_detail_response.status_code == 200
+            assert seller_detail_response.json()["company_domain"] == "acme.example"
+
             create_icp_response = await client.post(
                 f"/api/v1/tenants/{tenant_id}/icp-profiles",
                 json={
@@ -127,6 +160,18 @@ async def test_setup_routes_create_and_update_seller_and_icp_profiles(
             assert updated_icp_body["status"] == "active"
             assert updated_icp_body["exclusions_json"] == {"geography": ["antarctica"]}
             assert updated_icp_body["updated_by_user_id"] == icp_body["created_by_user_id"]
+
+            icp_list_response = await client.get(f"/api/v1/tenants/{tenant_id}/icp-profiles")
+            assert icp_list_response.status_code == 200
+            icp_list_body = icp_list_response.json()
+            assert icp_list_body["total"] == 1
+            assert icp_list_body["items"][0]["icp_profile_id"] == icp_body["icp_profile_id"]
+
+            icp_detail_response = await client.get(
+                f"/api/v1/tenants/{tenant_id}/icp-profiles/{icp_body['icp_profile_id']}"
+            )
+            assert icp_detail_response.status_code == 200
+            assert icp_detail_response.json()["status"] == "active"
     finally:
         app.dependency_overrides.clear()
 
@@ -188,5 +233,12 @@ async def test_setup_routes_reject_invalid_icp_input_and_reviewer_edits(
             )
             assert invalid_icp_response.status_code == 404
             assert invalid_icp_response.json()["error_code"] == "resource_not_found"
+
+            missing_seller_response = await client.get(
+                f"/api/v1/tenants/{tenant.id}/seller-profiles/{uuid4()}",
+                headers={"Authorization": "Bearer owner-subject"},
+            )
+            assert missing_seller_response.status_code == 404
+            assert missing_seller_response.json()["error_code"] == "resource_not_found"
     finally:
         app.dependency_overrides.clear()

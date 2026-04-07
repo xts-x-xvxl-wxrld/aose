@@ -76,6 +76,20 @@ export const setup = {
       body: JSON.stringify(payload),
     }),
 
+  listSellerProfiles: (token, tenantId, { limit = 50, offset = 0 } = {}) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+    return request(`/tenants/${tenantId}/seller-profiles?${params.toString()}`, {
+      headers: authHeader(token),
+    })
+  },
+
+  getSellerProfile: (token, tenantId, sellerProfileId) =>
+    request(`/tenants/${tenantId}/seller-profiles/${sellerProfileId}`, {
+      headers: authHeader(token),
+    }),
+
   updateSellerProfile: (token, tenantId, sellerProfileId, payload) =>
     request(`/tenants/${tenantId}/seller-profiles/${sellerProfileId}`, {
       method: 'PATCH',
@@ -90,9 +104,93 @@ export const setup = {
       body: JSON.stringify(payload),
     }),
 
+  listIcpProfiles: (token, tenantId, { limit = 50, offset = 0 } = {}) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+    return request(`/tenants/${tenantId}/icp-profiles?${params.toString()}`, {
+      headers: authHeader(token),
+    })
+  },
+
+  getIcpProfile: (token, tenantId, icpProfileId) =>
+    request(`/tenants/${tenantId}/icp-profiles/${icpProfileId}`, {
+      headers: authHeader(token),
+    }),
+
   updateIcpProfile: (token, tenantId, icpProfileId, payload) =>
     request(`/tenants/${tenantId}/icp-profiles/${icpProfileId}`, {
       method: 'PATCH',
+      headers: authHeader(token),
+      body: JSON.stringify(payload),
+    }),
+}
+
+export const workspace = {
+  listAccounts: (
+    token,
+    tenantId,
+    { sellerProfileId = '', icpProfileId = '', limit = 50, offset = 0 } = {},
+  ) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+    if (sellerProfileId) params.set('seller_profile_id', sellerProfileId)
+    if (icpProfileId) params.set('icp_profile_id', icpProfileId)
+    return request(`/tenants/${tenantId}/accounts?${params.toString()}`, {
+      headers: authHeader(token),
+    })
+  },
+
+  getAccount: (token, tenantId, accountId) =>
+    request(`/tenants/${tenantId}/accounts/${accountId}`, {
+      headers: authHeader(token),
+    }),
+
+  listContacts: (token, tenantId, { accountId = '', limit = 50, offset = 0 } = {}) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+    if (accountId) params.set('account_id', accountId)
+    return request(`/tenants/${tenantId}/contacts?${params.toString()}`, {
+      headers: authHeader(token),
+    })
+  },
+
+  getContact: (token, tenantId, contactId) =>
+    request(`/tenants/${tenantId}/contacts/${contactId}`, {
+      headers: authHeader(token),
+    }),
+
+  listWorkflowRuns: (token, tenantId, { limit = 50, offset = 0 } = {}) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+    return request(`/tenants/${tenantId}/workflow-runs?${params.toString()}`, {
+      headers: authHeader(token),
+    })
+  },
+
+  getWorkflowRun: (token, tenantId, runId) =>
+    request(`/tenants/${tenantId}/workflow-runs/${runId}`, {
+      headers: authHeader(token),
+    }),
+}
+
+export const review = {
+  listEvidence: (token, tenantId, runId) =>
+    request(`/tenants/${tenantId}/workflow-runs/${runId}/evidence`, {
+      headers: authHeader(token),
+    }),
+
+  getArtifact: (token, tenantId, artifactId) =>
+    request(`/tenants/${tenantId}/artifacts/${artifactId}`, {
+      headers: authHeader(token),
+    }),
+
+  submitApproval: (token, tenantId, runId, payload) =>
+    request(`/tenants/${tenantId}/workflow-runs/${runId}/approvals`, {
+      method: 'POST',
       headers: authHeader(token),
       body: JSON.stringify(payload),
     }),

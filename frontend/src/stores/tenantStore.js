@@ -5,7 +5,21 @@ const TENANT_CONTEXT_KEY = 'ose-tenant-context'
 
 function loadTenantContext() {
   try {
-    return JSON.parse(localStorage.getItem(TENANT_CONTEXT_KEY) || '{}')
+    const rawValue = JSON.parse(localStorage.getItem(TENANT_CONTEXT_KEY) || '{}')
+    const normalized = {}
+
+    for (const [tenantId, context] of Object.entries(rawValue || {})) {
+      if (!context || typeof context !== 'object') continue
+      normalized[tenantId] = {
+        activeSellerProfileId: context.activeSellerProfileId || '',
+        activeIcpProfileId: context.activeIcpProfileId || '',
+        activeAccountId: context.activeAccountId || '',
+        activeContactId: context.activeContactId || '',
+        threadId: context.threadId || '',
+      }
+    }
+
+    return normalized
   } catch {
     return {}
   }
@@ -17,13 +31,21 @@ function persistTenantContext(contextByTenant) {
 
 function getEmptyTenantContext() {
   return {
-    sellerProfiles: [],
-    icpProfiles: [],
     activeSellerProfileId: '',
     activeIcpProfileId: '',
     activeAccountId: '',
     activeContactId: '',
     threadId: '',
+  }
+}
+
+function getEmptyTenantResources() {
+  return {
+    sellerProfiles: [],
+    icpProfiles: [],
+    accounts: [],
+    contacts: [],
+    workflowRuns: [],
   }
 }
 
@@ -33,6 +55,7 @@ export const useTenantStore = create((set, get) => ({
   error: null,
   activeTenantId: localStorage.getItem(ACTIVE_TENANT_KEY) || '',
   contextByTenant: loadTenantContext(),
+  resourcesByTenant: {},
 
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
@@ -70,40 +93,72 @@ export const useTenantStore = create((set, get) => ({
     set({ activeTenantId: nextTenantId, error: null })
   },
 
+  setTenantResources: (tenantId, resources) =>
+    set((state) => {
+      const currentResources = state.resourcesByTenant[tenantId] || getEmptyTenantResources()
+      return {
+        resourcesByTenant: {
+          ...state.resourcesByTenant,
+          [tenantId]: {
+            ...currentResources,
+            ...resources,
+          },
+        },
+      }
+    }),
+
   upsertSellerProfile: (tenantId, sellerProfile) =>
     set((state) => {
       const currentContext = state.contextByTenant[tenantId] || getEmptyTenantContext()
-      const remainingProfiles = currentContext.sellerProfiles.filter(
+      const currentResources = state.resourcesByTenant[tenantId] || getEmptyTenantResources()
+      const remainingProfiles = currentResources.sellerProfiles.filter(
         (profile) => profile.seller_profile_id !== sellerProfile.seller_profile_id,
       )
       const nextContextByTenant = {
         ...state.contextByTenant,
         [tenantId]: {
           ...currentContext,
-          sellerProfiles: [...remainingProfiles, sellerProfile],
           activeSellerProfileId: sellerProfile.seller_profile_id,
         },
       }
       persistTenantContext(nextContextByTenant)
-      return { contextByTenant: nextContextByTenant }
+      return {
+        contextByTenant: nextContextByTenant,
+        resourcesByTenant: {
+          ...state.resourcesByTenant,
+          [tenantId]: {
+            ...currentResources,
+            sellerProfiles: [...remainingProfiles, sellerProfile],
+          },
+        },
+      }
     }),
 
   upsertIcpProfile: (tenantId, icpProfile) =>
     set((state) => {
       const currentContext = state.contextByTenant[tenantId] || getEmptyTenantContext()
-      const remainingProfiles = currentContext.icpProfiles.filter(
+      const currentResources = state.resourcesByTenant[tenantId] || getEmptyTenantResources()
+      const remainingProfiles = currentResources.icpProfiles.filter(
         (profile) => profile.icp_profile_id !== icpProfile.icp_profile_id,
       )
       const nextContextByTenant = {
         ...state.contextByTenant,
         [tenantId]: {
           ...currentContext,
-          icpProfiles: [...remainingProfiles, icpProfile],
           activeIcpProfileId: icpProfile.icp_profile_id,
         },
       }
       persistTenantContext(nextContextByTenant)
-      return { contextByTenant: nextContextByTenant }
+      return {
+        contextByTenant: nextContextByTenant,
+        resourcesByTenant: {
+          ...state.resourcesByTenant,
+          [tenantId]: {
+            ...currentResources,
+            icpProfiles: [...remainingProfiles, icpProfile],
+          },
+        },
+      }
     }),
 
   updateTenantContext: (tenantId, changes) =>
@@ -120,12 +175,24 @@ export const useTenantStore = create((set, get) => ({
       return { contextByTenant: nextContextByTenant }
     }),
 
+  clearTenantResources: (tenantId) =>
+    set((state) => {
+      const nextResourcesByTenant = { ...state.resourcesByTenant }
+      delete nextResourcesByTenant[tenantId]
+      return { resourcesByTenant: nextResourcesByTenant }
+    }),
+
   clearTenantContext: (tenantId) =>
     set((state) => {
       const nextContextByTenant = { ...state.contextByTenant }
+      const nextResourcesByTenant = { ...state.resourcesByTenant }
       delete nextContextByTenant[tenantId]
+      delete nextResourcesByTenant[tenantId]
       persistTenantContext(nextContextByTenant)
-      return { contextByTenant: nextContextByTenant }
+      return {
+        contextByTenant: nextContextByTenant,
+        resourcesByTenant: nextResourcesByTenant,
+      }
     }),
 
   getActiveTenant: () => {
@@ -136,5 +203,10 @@ export const useTenantStore = create((set, get) => ({
   getTenantContext: (tenantId) => {
     if (!tenantId) return getEmptyTenantContext()
     return get().contextByTenant[tenantId] || getEmptyTenantContext()
+  },
+
+  getTenantResources: (tenantId) => {
+    if (!tenantId) return getEmptyTenantResources()
+    return get().resourcesByTenant[tenantId] || getEmptyTenantResources()
   },
 }))
