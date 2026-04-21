@@ -6,6 +6,12 @@ A catalog of all pages in this wiki. Agents update this on every ingest or signi
 
 ## Specs — active build instructions
 
+### hubspot-integration
+- [Overview](specs/hubspot-integration/overview.md) — goal, scope, and reading order
+- [API Contract](specs/hubspot-integration/api-contract.md) — exact request/response shapes for HubSpot API calls and our own endpoints
+- [Backend Spec](specs/hubspot-integration/backend-spec.md) — OAuth flow, token model, push endpoints, field mapping
+- [Frontend Spec](specs/hubspot-integration/frontend-spec.md) — connect UX, push button, connection state, routing
+
 ### frontend-rebuild
 - [Overview](specs/frontend-rebuild/overview.md) — directory overview and reading order
 - [Current State and Gap Map](specs/frontend-rebuild/current-state-and-gap-map.md) — active frontend/backend shape, gaps, and integration surface

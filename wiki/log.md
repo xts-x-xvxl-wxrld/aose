@@ -31,3 +31,7 @@ This also requires updating the wiki schema, index, and the existing wiki-refact
 ## [2026-04-07] complete | Agent: Codex | Move current-app reference docs out of specs
 Moved the current-app overview hub page and its subsystem pages into `wiki/architecture/` and updated the wiki schema, index, and agent instructions so reference docs are separated from active specs.
 Also updated the current-app wiki restructure feature note so it reflects the final architecture-based location.
+
+## [2026-04-21] plan | Agent: Claude Code | Write HubSpot integration specs
+Writing backend and frontend specs for HubSpot OAuth connect/disconnect and push-to-CRM flows.
+The goal is to define the integration surface clearly enough that both agents can implement independently without ambiguity.

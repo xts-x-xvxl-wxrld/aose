@@ -46,3 +46,13 @@ Pages with `status: active` in their frontmatter are current build instructions.
 - `wiki/log.md` is append-only — never edit entries already written
 - Reference spec pages record what was built — correct factual errors only, don't rewrite them
 - If current code contradicts an active spec, flag it rather than silently changing either
+
+## Git Freshness Protocol
+
+- Every completed change slice must end with a Git commit if the wiki or codebase changed.
+- Push the current branch after each slice commit when a remote is configured, so GitHub stays fresh.
+- Use a focused commit message that names the completed task or slice.
+- Before staging, inspect `git status` and avoid committing unrelated dirty files from another user or agent.
+- Never commit `.env`, secrets, local session files, data volumes, caches, logs, or virtual environments.
+- `git ci "message"` may be used only when the worktree contains no unrelated changes, because it stages with `git add -A`.
+- Name branches as a short kebab-case description of the work (e.g. `hubspot-integration`, `frontend-auth-fix`). Never use random or auto-generated branch names.
